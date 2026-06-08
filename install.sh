@@ -143,7 +143,7 @@ short_id=$(openssl rand -hex 8)
 openssl ecparam -genkey -name prime256v1 -out /etc/s-box/private.key
 openssl req -new -x509 -days 36500 -key /etc/s-box/private.key -out /etc/s-box/cert.pem -subj "/CN=www.bing.com"
 
-# 7. 端口自动分配（检查端口冲突）
+# 7. 端口自动分配与自定义（检查端口冲突）
 check_port() {
     local port=$1
     if ss -tunlp | grep -q ":$port "; then
@@ -153,10 +153,12 @@ check_port() {
     fi
 }
 
-get_random_port() {
+get_random_port_in_range() {
+    local min=$1
+    local max=$2
     local port
     while true; do
-        port=$(shuf -i 20000-60000 -n 1)
+        port=$(shuf -i ${min}-${max} -n 1)
         if check_port "$port"; then
             echo "$port"
             break
@@ -164,17 +166,95 @@ get_random_port() {
     done
 }
 
-# 动态为已选协议分配随机端口
-is_enabled "$ENABLE_VLESS" && PORT_VLESS=$(get_random_port)
-is_enabled "$ENABLE_VMESS" && PORT_VMESS=$(get_random_port)
-is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_random_port)
-if is_enabled "$ENABLE_ARGO"; then
-    is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_random_port)
-    PORT_NGINX=8401
+get_custom_port() {
+    local name=$1
+    local default_val=$2
+    local port
+    while true; do
+        read -p "请输入 ${name} 的监听端口 [默认 ${default_val}]: " port
+        [[ -z "$port" ]] && port=$default_val
+        if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+            if check_port "$port"; then
+                echo "$port"
+                break
+            else
+                log_warn "端口 $port 已被占用，请重新输入！"
+            fi
+        else
+            log_err "输入不合法，请输入 1-65535 之间的数字！"
+        fi
+    done
+}
+
+get_port_range() {
+    local range_str
+    local start_port
+    local end_port
+    while true; do
+        read -p "请输入端口范围 [格式例如 10000-20000, 默认 20000-60000]: " range_str
+        if [[ -z "$range_str" ]]; then
+            start_port=20000
+            end_port=60000
+            break
+        fi
+        if [[ "$range_str" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            start_port=${BASH_REMATCH[1]}
+            end_port=${BASH_REMATCH[2]}
+            if [ "$start_port" -ge 1 ] && [ "$start_port" -le 65535 ] && \
+               [ "$end_port" -ge 1 ] && [ "$end_port" -le 65535 ] && \
+               [ "$start_port" -le "$end_port" ]; then
+                break
+            fi
+        fi
+        log_err "输入不合法！格式应为: 起始端口-结束端口 (如 10000-20000)，且在 1-65535 之间。"
+    done
+    echo "${start_port} ${end_port}"
+}
+
+echo "=================================================="
+echo "          请选择端口配置方式"
+echo "=================================================="
+echo "1. 自动随机端口分配 (20000-60000 范围，直接回车)"
+echo "2. 手动为每个选定协议指定固定端口"
+echo "3. 指定自定义端口范围并在此范围内随机分配"
+echo "=================================================="
+read -p "请输入选项 [1-3, 默认1]: " port_choice
+
+if [[ "$port_choice" == "2" ]]; then
+    is_enabled "$ENABLE_VLESS" && PORT_VLESS=$(get_custom_port "VLESS-Reality" 28201)
+    is_enabled "$ENABLE_VMESS" && PORT_VMESS=$(get_custom_port "VMess-WS" 38202)
+    is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_custom_port "Trojan-WS-TLS" 48203)
+    if is_enabled "$ENABLE_ARGO"; then
+        is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_custom_port "Trojan-WS (Argo内部)" 58204)
+        PORT_NGINX=8401
+    fi
+    is_enabled "$ENABLE_HY2" && PORT_HY2=$(get_custom_port "Hysteria2" 21092)
+    is_enabled "$ENABLE_TUIC" && PORT_TUIC=$(get_custom_port "TUIC v5" 33104)
+    is_enabled "$ENABLE_ANYTLS" && PORT_ANYTLS=$(get_custom_port "AnyTLS" 48205)
+elif [[ "$port_choice" == "3" ]]; then
+    read start_p end_p <<< $(get_port_range)
+    is_enabled "$ENABLE_VLESS" && PORT_VLESS=$(get_random_port_in_range $start_p $end_p)
+    is_enabled "$ENABLE_VMESS" && PORT_VMESS=$(get_random_port_in_range $start_p $end_p)
+    is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_random_port_in_range $start_p $end_p)
+    if is_enabled "$ENABLE_ARGO"; then
+        is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_random_port_in_range $start_p $end_p)
+        PORT_NGINX=8401
+    fi
+    is_enabled "$ENABLE_HY2" && PORT_HY2=$(get_random_port_in_range $start_p $end_p)
+    is_enabled "$ENABLE_TUIC" && PORT_TUIC=$(get_random_port_in_range $start_p $end_p)
+    is_enabled "$ENABLE_ANYTLS" && PORT_ANYTLS=$(get_random_port_in_range $start_p $end_p)
+else
+    is_enabled "$ENABLE_VLESS" && PORT_VLESS=$(get_random_port_in_range 20000 60000)
+    is_enabled "$ENABLE_VMESS" && PORT_VMESS=$(get_random_port_in_range 20000 60000)
+    is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_random_port_in_range 20000 60000)
+    if is_enabled "$ENABLE_ARGO"; then
+        is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_random_port_in_range 20000 60000)
+        PORT_NGINX=8401
+    fi
+    is_enabled "$ENABLE_HY2" && PORT_HY2=$(get_random_port_in_range 20000 60000)
+    is_enabled "$ENABLE_TUIC" && PORT_TUIC=$(get_random_port_in_range 20000 60000)
+    is_enabled "$ENABLE_ANYTLS" && PORT_ANYTLS=$(get_random_port_in_range 20000 60000)
 fi
-is_enabled "$ENABLE_HY2" && PORT_HY2=$(get_random_port)
-is_enabled "$ENABLE_TUIC" && PORT_TUIC=$(get_random_port)
-is_enabled "$ENABLE_ANYTLS" && PORT_ANYTLS=$(get_random_port)
 
 # 获取服务器公网 IP
 IPV4=$(curl -s4m5 icanhazip.com || curl -s4m5 api.ipify.org)
