@@ -34,11 +34,22 @@
 
 ## 📥 安装与运行
 
-在你的 Linux 服务器（支持 Ubuntu, Debian, CentOS）上，使用 root 权限执行以下一键安装命令：
+在你的 Linux 服务器（支持 Ubuntu, Debian, CentOS）上，使用 root 权限根据需要选择以下一键部署方案：
+
+### 🔹 方案一：标准全直连一键部署脚本（原版）
+适合希望 Sing-box 独立负责入站与出站，直接使用服务器网络访问外部的用户。
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/hxzlplp7/singbox/main/install.sh)
 ```
+
+### 🔹 方案二：Sing-box 入站对接本地 Mihomo 出站一键部署脚本（出站桥接版）
+适合已在服务器部署了 Mihomo (Clash Meta)，希望使用 Sing-box 负责协议入站，出站流量统一转发到本地 Mihomo（通过 Socks5）进行策略组选择和分流的用户。
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/hxzlplp7/singbox/main/install_mihomo_bridge.sh)
+```
+*提示：安装过程中会提示输入本地 Mihomo 监听的 Socks5 端口（默认 `7890`）。*
 
 ### 节点选择交互
 
