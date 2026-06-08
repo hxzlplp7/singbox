@@ -63,10 +63,17 @@ esac
 # 2. 安装必要依赖
 log_info "正在安装必要的系统依赖..."
 if [[ "$release" == "CentOS" ]]; then
-    yum install -y jq curl tar wget unzip gzip psmisc
+    log_info "正在通过 yum 安装依赖..."
+    yum install -y epel-release
+    yum install -y jq curl tar wget unzip gzip psmisc nginx cronie
+    systemctl enable crond >/dev/null 2>&1
+    systemctl start crond >/dev/null 2>&1
 else
+    log_info "正在通过 apt 安装依赖..."
     apt-get update -y
-    apt-get install -y jq curl tar wget unzip gzip psmisc
+    apt-get install -y jq curl tar wget unzip gzip psmisc nginx cron
+    systemctl enable cron >/dev/null 2>&1
+    systemctl start cron >/dev/null 2>&1
 fi
 
 # 创建配置目录
@@ -90,8 +97,6 @@ read -p "请输入 Mihomo 本地 Socks5/HTTP 混合监听端口 [默认 7890]: "
 [[ -n "$opt_m_port" ]] && MIHOMO_PORT=$opt_m_port
 
 YACD_PORT=9090
-read -p "请输入 yacd 网页控制面板监听端口 [默认 9090]: " opt_y_port
-[[ -n "$opt_y_port" ]] && YACD_PORT=$opt_y_port
 
 MIHOMO_SECRET=$(openssl rand -hex 6)
 read -p "请输入 yacd 面板连接密钥/密码 [默认 随机生成: ${MIHOMO_SECRET}]: " opt_secret
@@ -151,7 +156,7 @@ cat <<EOF >> /etc/mihomo/config.yaml
 
 # --- 自定义出站重定向配置 (Sing-box 桥接) ---
 mixed-port: ${MIHOMO_PORT}
-external-controller: 0.0.0.0:${YACD_PORT}
+external-controller: '127.0.0.1:9090'
 secret: "${MIHOMO_SECRET}"
 external-ui: yacd
 # --- 自定义配置结束 ---
@@ -172,7 +177,55 @@ else
     log_info "本地版 yacd 网页控制面板部署成功。"
 fi
 
-# 7. 创建 systemd 服务
+# 7. 下载并安装 Argo 隧道
+cf_cpu="amd64"
+cf_arch=$(uname -m)
+case $cf_arch in
+    x86_64) cf_cpu="amd64" ;;
+    aarch64) cf_cpu="arm64" ;;
+    armv7l) cf_cpu="arm" ;;
+esac
+
+if [[ -f /usr/local/bin/cloudflared ]]; then
+    log_info "检测到系统已安装 Cloudflared，跳过下载..."
+else
+    log_info "正在下载 Cloudflared 客户端..."
+    cf_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cf_cpu}"
+    wget -qO /usr/local/bin/cloudflared "$cf_url"
+    if [[ -f "/usr/local/bin/cloudflared" ]]; then
+        chmod +x /usr/local/bin/cloudflared
+        log_info "Cloudflared 安装成功：$(/usr/local/bin/cloudflared --version)"
+    else
+        log_err "下载 Cloudflared 失败！"
+    fi
+fi
+
+# 配置 Nginx 反代 9090
+log_info "正在配置 Nginx..."
+PORT_NGINX=8401
+cat > /etc/nginx/conf.d/singbox-argo.conf <<EOF
+server {
+    listen 127.0.0.1:${PORT_NGINX};
+    server_name localhost;
+
+    location / {
+        root /etc/mihomo/yacd;
+        index index.html;
+    }
+
+    location /api {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:9090;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$http_host;
+    }
+}
+EOF
+systemctl restart nginx
+
+# 8. 创建 systemd 服务
 log_info "正在创建 systemd 服务守护..."
 cat > /etc/systemd/system/mihomo.service <<EOF
 [Unit]
@@ -195,13 +248,64 @@ systemctl daemon-reload
 systemctl enable mihomo
 systemctl restart mihomo
 
-# 8. 创建自动更新订阅脚本与定时任务
+# Argo 隧道服务配置与检测
+run_argo_setup=true
+if [[ -f /etc/s-box/argo.log && -s /etc/s-box/argo.log ]] && systemctl is-active --quiet argo-tunnel; then
+    ARGO_DOMAIN=$(cat /etc/s-box/argo.log | tr -d ' \n\r')
+    if [[ -n "$ARGO_DOMAIN" && "$ARGO_DOMAIN" =~ \.trycloudflare\.com$ ]]; then
+        log_info "检测到已有 Argo 隧道正在运行中，复用临时域名: $ARGO_DOMAIN"
+        run_argo_setup=false
+    fi
+fi
+
+if [ "$run_argo_setup" = true ]; then
+    mkdir -p /etc/s-box
+    cat > /etc/systemd/system/argo-tunnel.service <<EOF
+[Unit]
+Description=Argo Tunnel Service
+After=network.target
+
+[Service]
+User=root
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${PORT_NGINX}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable argo-tunnel
+    systemctl restart argo-tunnel
+
+    log_info "正在等待 Argo 隧道上线，获取面板临时域名..."
+    sleep 6
+
+    ARGO_DOMAIN=""
+    for i in {1..5}; do
+        ARGO_DOMAIN=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+        [[ -n "$ARGO_DOMAIN" ]] && break
+        sleep 2
+    done
+
+    if [[ -z "$ARGO_DOMAIN" ]]; then
+        log_warn "获取 Argo 域名超时，请稍后手动查看日志。"
+        ARGO_DOMAIN="[未获取到Argo域名]"
+    fi
+    echo "$ARGO_DOMAIN" > /etc/s-box/argo.log
+fi
+
+# 9. 创建自动更新订阅脚本与定时任务
 log_info "正在创建定时更新订阅脚本..."
 cat > /etc/mihomo/update_sub.sh <<EOF
 #!/bin/bash
 # Mihomo 订阅自动更新脚本
 
 export LANG=en_US.UTF-8
+
+MIHOMO_PORT=${MIHOMO_PORT}
+MIHOMO_SECRET="${MIHOMO_SECRET}"
 
 # 下载新订阅
 curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash_meta" -o /etc/mihomo/config.yaml.tmp "${SUB_URL}"
@@ -225,9 +329,9 @@ if [[ -f /etc/mihomo/config.yaml.tmp && -s /etc/mihomo/config.yaml.tmp ]]; then
     cat <<EOF2 >> /etc/mihomo/config.yaml.tmp
 
 # --- 自定义出站重定向配置 (Sing-box 桥接) ---
-mixed-port: ${MIHOMO_PORT}
-external-controller: 0.0.0.0:${YACD_PORT}
-secret: "${MIHOMO_SECRET}"
+mixed-port: \${MIHOMO_PORT}
+external-controller: '127.0.0.1:9090'
+secret: "\${MIHOMO_SECRET}"
 external-ui: yacd
 # --- 自定义配置结束 ---
 EOF2
@@ -248,19 +352,25 @@ if ! crontab -l 2>/dev/null | grep -q "/etc/mihomo/update_sub.sh"; then
 fi
 
 # 输出完成信息
-IPV4=$(curl -s4m5 icanhazip.com || curl -s4m5 api.ipify.org)
-IPV6=$(curl -s6m5 icanhazip.com || curl -s6m5 api6.ipify.org)
-IP=${IPV4:-$IPV6}
+ARGO_DOMAIN=""
+if [[ -f /etc/s-box/argo.log ]]; then
+    ARGO_DOMAIN=$(cat /etc/s-box/argo.log)
+fi
 
 echo ""
 echo "=================================================="
 echo "      Mihomo (Clash Meta) 部署安装成功"
 echo "=================================================="
 echo "1. 本地监听的 Socks5 端口: ${MIHOMO_PORT} (用于对接 Sing-box 出站)"
-echo "2. yacd 外部控制面板地址: http://${IP}:${YACD_PORT}/ui"
-echo "3. yacd 面板安全密钥/密码: ${MIHOMO_SECRET}"
+if [[ -n "$ARGO_DOMAIN" ]]; then
+    echo "2. yacd 外部控制面板地址: https://${ARGO_DOMAIN}"
+    echo "3. yacd API 连接地址(Host): https://${ARGO_DOMAIN}/api"
+else
+    echo "2. yacd 外部控制面板地址: (等待Argo隧道上线获取域名...)"
+fi
+echo "4. yacd 面板安全密钥/密码: ${MIHOMO_SECRET}"
 echo ""
 echo "💡 使用说明："
-echo "在浏览器打开上述 yacd 地址，输入 Host (您的公网IP)、Port (${YACD_PORT}) 和 Secret (${MIHOMO_SECRET}) 即可进行分流节点切换与网络监控。"
+echo "在浏览器打开上述 yacd 地址，在 API 地址栏中填入面板 API 连接地址(Host)，输入 Secret (${MIHOMO_SECRET}) 即可进行分流节点切换与网络监控。"
 echo "=================================================="
 echo ""

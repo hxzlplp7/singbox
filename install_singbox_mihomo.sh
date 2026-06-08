@@ -1214,11 +1214,15 @@ log_info "正在安装必要的系统依赖..."
 if [[ "$release" == "CentOS" ]]; then
     log_info "正在通过 yum 安装依赖..."
     yum install -y epel-release
-    yum install -y jq openssl curl tar wget unzip gzip psmisc nginx
+    yum install -y jq openssl curl tar wget unzip gzip psmisc nginx cronie
+    systemctl enable crond >/dev/null 2>&1
+    systemctl start crond >/dev/null 2>&1
 else
     log_info "正在通过 apt 安装依赖..."
     apt-get update -y
-    apt-get install -y jq openssl curl tar wget unzip gzip psmisc nginx
+    apt-get install -y jq openssl curl tar wget unzip gzip psmisc nginx cron
+    systemctl enable cron >/dev/null 2>&1
+    systemctl start cron >/dev/null 2>&1
 fi
 
 # 3. 创建配置文件目录
