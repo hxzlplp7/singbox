@@ -367,9 +367,9 @@ echo "      Mihomo (Clash Meta) 部署安装成功"
 echo "=================================================="
 echo "1. 本地监听的 Socks5 端口: ${MIHOMO_PORT} (用于对接 Sing-box 出站)"
 if [[ -n "$ARGO_DOMAIN" && "$ARGO_DOMAIN" =~ \.trycloudflare\.com$ ]]; then
-    echo "2. yacd 一键免密直连地址: https://${ARGO_DOMAIN}/?hostname=${ARGO_DOMAIN}&port=443&secret=${MIHOMO_SECRET}&https=true#/proxies"
+    echo "2. yacd 一键免密直连地址: https://${ARGO_DOMAIN}/?hostname=${ARGO_DOMAIN}&port=443&secret=${MIHOMO_SECRET}&https=true"
 else
-    echo "2. yacd 一键免密局域网地址: http://${IP}:8401/?hostname=${IP}&port=8401&secret=${MIHOMO_SECRET}#/proxies"
+    echo "2. yacd 一键免密局域网地址: http://${IP}:8401/?hostname=${IP}&port=8401&secret=${MIHOMO_SECRET}"
 fi
 echo "3. yacd 面板连接密钥/密码: ${MIHOMO_SECRET}"
 echo ""
