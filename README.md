@@ -51,6 +51,12 @@ bash <(curl -Ls https://raw.githubusercontent.com/hxzlplp7/singbox/main/install_
 ```
 *提示：安装过程中会提示输入本地 Mihomo 监听的 Socks5 端口（默认 `7890`）。*
 
+> 💡 **推荐配合部署**：如果您尚未在服务器上运行 Mihomo 客户端，您可以使用我们提供的 **Mihomo (Clash Meta) 一键部署脚本**。它支持全自动安装最新内核、下载并解析 Clash 订阅、自定义控制端口和控制密钥，并自动部署本地网页版 **yacd** 可视化面板：
+> ```bash
+> bash <(curl -Ls https://raw.githubusercontent.com/hxzlplp7/singbox/main/deploy_mihomo.sh)
+> ```
+
+
 ### 节点选择交互
 
 运行后，终端会进入两步交互：
