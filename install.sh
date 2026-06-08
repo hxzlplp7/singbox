@@ -565,7 +565,7 @@ if is_enabled "$ENABLE_ARGO"; then
 {
   "v": "2",
   "ps": "SB-VMess-Argo-80",
-  "add": "${ARGO_DOMAIN}",
+  "add": "cdn.2020111.xyz",
   "port": "80",
   "id": "${UUID}",
   "aid": "0",
@@ -585,7 +585,7 @@ EOF
 {
   "v": "2",
   "ps": "SB-VMess-Argo-443",
-  "add": "${ARGO_DOMAIN}",
+  "add": "cdn.2020111.xyz",
   "port": "443",
   "id": "${UUID}",
   "aid": "0",
@@ -610,8 +610,8 @@ EOF
     fi
 
     if is_enabled "$ENABLE_TROJAN"; then
-        TROJAN_ARGO_80_LINK="trojan://${UUID}@${ARGO_DOMAIN}:80?security=none&type=ws&path=%2F${UUID}-tr-argo#SB-Trojan-Argo-80"
-        TROJAN_ARGO_443_LINK="trojan://${UUID}@${ARGO_DOMAIN}:443?security=tls&sni=${ARGO_DOMAIN}&type=ws&path=%2F${UUID}-tr-argo#SB-Trojan-Argo-443"
+        TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-80"
+        TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_DOMAIN}&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-443"
 
         echo "3. Trojan Argo (80端口):" >> /etc/s-box/info.log
         echo "${TROJAN_ARGO_80_LINK}" >> /etc/s-box/info.log
