@@ -273,6 +273,27 @@ EOF2
     echo "==================================================" >> /etc/s-box/info.log
 }
 
+# 重新获取 Argo 临时域名并写入 argo.log
+update_argo_domain() {
+    if [[ ! -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
+        return
+    fi
+    echo "正在等待 Argo 隧道上线并获取临时域名..."
+    sleep 6
+    local argo_domain=""
+    for i in {1..5}; do
+        argo_domain=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+        [[ -n "$argo_domain" ]] && break
+        sleep 2
+    done
+    if [[ -n "$argo_domain" ]]; then
+        echo "$argo_domain" > /etc/s-box/argo.log
+        echo "成功获取 Argo 新域名: $argo_domain"
+    else
+        echo "警告：未获取到 Argo 域名，可能隧道启动较慢，请稍后查看。"
+    fi
+}
+
 apply_changes() {
     echo "正在应用更改，重启 Sing-box 服务..."
     systemctl restart sing-box
@@ -281,6 +302,7 @@ apply_changes() {
         echo "正在重启 Nginx 和 Argo 服务..."
         regenerate_nginx_conf
         systemctl restart argo-tunnel 2>/dev/null
+        update_argo_domain
     fi
     
     regenerate_info_log
@@ -407,7 +429,7 @@ modify_vmess() {
                         echo "警告：端口 $new_port 已被占用！"
                     else
                         local temp_json=$(mktemp)
-                        jq --argport port "$new_port" '(.inbounds[] | select(.tag=="vmess-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        jq --argjson port "$new_port" '(.inbounds[] | select(.tag=="vmess-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
                         echo "端口修改成功，新端口: $new_port"
                         apply_changes
                     fi
@@ -493,7 +515,7 @@ modify_trojan() {
                         echo "警告：端口 $new_port 已被占用！"
                     else
                         local temp_json=$(mktemp)
-                        jq --argport port "$new_port" '(.inbounds[] | select(.tag=="trojan-tls-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        jq --argjson port "$new_port" '(.inbounds[] | select(.tag=="trojan-tls-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
                         echo "端口修改成功，新端口: $new_port"
                         apply_changes
                     fi
@@ -552,7 +574,7 @@ modify_trojan() {
                             echo "警告：端口 $new_port 已被占用！"
                         else
                             local temp_json=$(mktemp)
-                            jq --argport port "$new_port" '(.inbounds[] | select(.tag=="trojan-ws-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                            jq --argjson port "$new_port" '(.inbounds[] | select(.tag=="trojan-ws-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
                             echo "Argo 内部 Trojan-WS 端口修改成功，新端口: $new_port"
                             apply_changes
                         fi
@@ -614,7 +636,7 @@ modify_hy2() {
                         echo "警告：端口 $new_port 已被占用！"
                     else
                         local temp_json=$(mktemp)
-                        jq --argport port "$new_port" '(.inbounds[] | select(.tag=="hy2-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        jq --argjson port "$new_port" '(.inbounds[] | select(.tag=="hy2-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
                         echo "端口修改成功，新端口: $new_port"
                         apply_changes
                     fi
@@ -666,7 +688,7 @@ modify_tuic() {
                         echo "警告：端口 $new_port 已被占用！"
                     else
                         local temp_json=$(mktemp)
-                        jq --argport port "$new_port" '(.inbounds[] | select(.tag=="tuic-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        jq --argjson port "$new_port" '(.inbounds[] | select(.tag=="tuic-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
                         echo "端口修改成功，新端口: $new_port"
                         apply_changes
                     fi
@@ -722,7 +744,7 @@ modify_anytls() {
                         echo "警告：端口 $new_port 已被占用！"
                     else
                         local temp_json=$(mktemp)
-                        jq --argport port "$new_port" '(.inbounds[] | select(.tag=="anytls-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        jq --argjson port "$new_port" '(.inbounds[] | select(.tag=="anytls-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
                         echo "端口修改成功，新端口: $new_port"
                         apply_changes
                     fi
@@ -872,8 +894,12 @@ while true; do
         2)
             echo "正在重启服务..."
             systemctl restart sing-box
-            systemctl restart argo-tunnel 2>/dev/null
-            echo "重启完成！"
+            if [[ -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
+                systemctl restart argo-tunnel 2>/dev/null
+                update_argo_domain
+            fi
+            regenerate_info_log
+            echo "重启完成并已重新生成分享链接！"
             ;;
         3)
             echo "正在停止服务..."
