@@ -99,6 +99,21 @@ regenerate_nginx_conf() {
 server {
     listen 127.0.0.1:${port_nginx};
     server_name localhost;
+
+    location / {
+        root /etc/mihomo/yacd;
+        index index.html;
+    }
+
+    location /api {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:9090;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$http_host;
+    }
+
     ${nginx_locations}
 }
 EOF2
@@ -296,16 +311,21 @@ EOF2
     # 获取出站桥接与网页控制面板参数
     local mihomo_port=$(jq -r '.outbounds[] | select(.tag=="mihomo-out") | .server_port // "未配置"' /etc/s-box/sb.json)
     
-    local yacd_port=$(grep -oE "external-controller:.*:[0-9]+" /etc/mihomo/config.yaml 2>/dev/null | awk -F: '{print $NF}' | tr -d "'\" ")
-    [[ -z "$yacd_port" ]] && yacd_port=$(grep -oE "external-controller:.*" /etc/mihomo/config.yaml 2>/dev/null | head -n 1 | tr -d "'\" " | awk -F: '{print $NF}')
-    [[ -z "$yacd_port" ]] && yacd_port="9090"
-    
+    local argo_domain=""
+    if [[ -f /etc/s-box/argo.log ]]; then
+        argo_domain=$(cat /etc/s-box/argo.log)
+    fi
     local yacd_secret=$(grep -E "^secret:" /etc/mihomo/config.yaml 2>/dev/null | head -n 1 | awk '{print $2}' | tr -d "'\" ")
 
     echo "------------------【出站桥接】--------------------" >> /etc/s-box/info.log
     echo "本地出站 Mihomo (Socks5) 端口: ${mihomo_port}" >> /etc/s-box/info.log
-    echo "yacd 可视化控制面板访问地址: http://${ip}:${yacd_port}/ui" >> /etc/s-box/info.log
-    echo "yacd 连接密钥/密码: ${yacd_secret}" >> /etc/s-box/info.log
+    if [[ -n "$argo_domain" ]]; then
+        echo "yacd 控制面板访问地址: https://${argo_domain}" >> /etc/s-box/info.log
+        echo "yacd API 连接地址(Host): https://${argo_domain}/api" >> /etc/s-box/info.log
+    else
+        echo "yacd 控制面板访问地址: (等待Argo隧道上线获取域名...)" >> /etc/s-box/info.log
+    fi
+    echo "yacd 连接密码/密钥: ${yacd_secret}" >> /etc/s-box/info.log
     echo "==================================================" >> /etc/s-box/info.log
 }
 
@@ -335,10 +355,14 @@ apply_changes() {
     systemctl restart sing-box
     
     if [[ -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
-        echo "正在重启 Nginx 和 Argo 服务..."
+        echo "正在重启 Nginx 服务..."
         regenerate_nginx_conf
-        systemctl restart argo-tunnel 2>/dev/null
-        update_argo_domain
+        # 仅当 argo-tunnel 未运行时才启动/重启它，以保持临时域名不变
+        if ! systemctl is-active --quiet argo-tunnel; then
+            echo "正在启动 Argo 隧道服务..."
+            systemctl restart argo-tunnel 2>/dev/null
+            update_argo_domain
+        fi
     fi
     
     regenerate_info_log
@@ -849,63 +873,24 @@ modify_yacd_params() {
         return
     fi
     
-    local cur_y_port=$(grep -oE "external-controller:.*:[0-9]+" /etc/mihomo/config.yaml | awk -F: '{print $NF}' | tr -d "'\" ")
-    [[ -z "$cur_y_port" ]] && cur_y_port=$(grep -oE "external-controller:.*" /etc/mihomo/config.yaml | head -n 1 | tr -d "'\" " | awk -F: '{print $NF}')
-    [[ -z "$cur_y_port" ]] && cur_y_port=9090
-    
     local cur_secret=$(grep -E "^secret:" /etc/mihomo/config.yaml | head -n 1 | awk '{print $2}' | tr -d "'\" ")
 
-    while true; do
-        echo "--------------------------------------------------"
-        echo "          yacd 面板控制端参数修改"
-        echo "--------------------------------------------------"
-        echo "1. 修改 yacd 控制端口 (当前: $cur_y_port)"
-        echo "2. 修改 yacd 连接密码 (当前: $cur_secret)"
-        echo "0. 返回"
-        echo "--------------------------------------------------"
-        read -p "请选择修改项 [0-2]: " yacd_opt
-        [[ -z "$yacd_opt" ]] && yacd_opt=0
-        
-        if [[ "$yacd_opt" == "0" ]]; then
-            break
+    echo "--------------------------------------------------"
+    echo "          yacd 面板连接密码修改"
+    echo "--------------------------------------------------"
+    echo "当前连接密码: $cur_secret"
+    read -p "请输入新密钥/密码 (留空不修改): " new_secret
+    if [[ -n "$new_secret" ]]; then
+        sed -i "/^secret:/c\secret: \"${new_secret}\"" /etc/mihomo/config.yaml
+        if [[ -f /etc/mihomo/update_sub.sh ]]; then
+            sed -i "s/MIHOMO_SECRET=.*/MIHOMO_SECRET=\"${new_secret}\"/g" /etc/mihomo/update_sub.sh
         fi
-        
-        case $yacd_opt in
-            1)
-                read -p "请输入新端口: " new_y_port
-                if [[ "$new_y_port" =~ ^[0-9]+$ ]] && [ "$new_y_port" -ge 1 ] && [ "$new_y_port" -le 65535 ]; then
-                    sed -i "/^external-controller:/c\external-controller: 0.0.0.0:${new_y_port}" /etc/mihomo/config.yaml
-                    if [[ -f /etc/mihomo/update_sub.sh ]]; then
-                        sed -i "s/YACD_PORT=[0-9]*/YACD_PORT=${new_y_port}/g" /etc/mihomo/update_sub.sh
-                    fi
-                    systemctl restart mihomo
-                    cur_y_port=$new_y_port
-                    echo "yacd 控制端口修改成功，新端口: $new_y_port"
-                    regenerate_info_log
-                else
-                    echo "无效端口！"
-                fi
-                ;;
-            2)
-                read -p "请输入新密钥/密码: " new_secret
-                if [[ -n "$new_secret" ]]; then
-                    sed -i "/^secret:/c\secret: \"${new_secret}\"" /etc/mihomo/config.yaml
-                    if [[ -f /etc/mihomo/update_sub.sh ]]; then
-                        sed -i "s/MIHOMO_SECRET=.*/MIHOMO_SECRET=\"${new_secret}\"/g" /etc/mihomo/update_sub.sh
-                    fi
-                    systemctl restart mihomo
-                    cur_secret=$new_secret
-                    echo "yacd 连接密码修改成功，新密码: $new_secret"
-                    regenerate_info_log
-                else
-                    echo "密码不能为空！"
-                fi
-                ;;
-            *)
-                echo "无效选项！"
-                ;;
-        esac
-    done
+        systemctl restart mihomo
+        echo "yacd 连接密码修改成功，新密码: $new_secret"
+        regenerate_info_log
+    else
+        echo "已取消密码修改。"
+    fi
 }
 
 update_mihomo_sub() {
@@ -992,7 +977,7 @@ modify_node_params() {
             echo "${menu_index}. 修改出站 Mihomo 本地对接端口"
             opt_mihomo=$menu_index
             ((menu_index++))
-            echo "${menu_index}. 修改 yacd 网页控制端口与密码"
+            echo "${menu_index}. 修改 yacd 网页控制密码"
             opt_yacd=$menu_index
             ((menu_index++))
         fi
@@ -1181,8 +1166,6 @@ read -p "请输入本地 Socks5 对接端口 [默认 7890]: " opt_m_port
 [[ -n "$opt_m_port" ]] && MIHOMO_PORT=$opt_m_port
 
 YACD_PORT=9090
-read -p "请输入 yacd 网页控制面板监听端口 [默认 9090]: " opt_y_port
-[[ -n "$opt_y_port" ]] && YACD_PORT=$opt_y_port
 
 MIHOMO_SECRET=$(openssl rand -hex 6)
 read -p "请输入 yacd 面板连接密钥/密码 [默认 随机生成: ${MIHOMO_SECRET}]: " opt_secret
@@ -1229,13 +1212,13 @@ esac
 # 2. 安装系统依赖和 Nginx
 log_info "正在安装必要的系统依赖..."
 if [[ "$release" == "CentOS" ]]; then
+    log_info "正在通过 yum 安装依赖..."
     yum install -y epel-release
-    yum install -y jq openssl curl tar wget unzip gzip psmisc
-    is_enabled "$ENABLE_ARGO" && yum install -y nginx
+    yum install -y jq openssl curl tar wget unzip gzip psmisc nginx
 else
+    log_info "正在通过 apt 安装依赖..."
     apt-get update -y
-    apt-get install -y jq openssl curl tar wget unzip gzip psmisc
-    is_enabled "$ENABLE_ARGO" && apt-get install -y nginx
+    apt-get install -y jq openssl curl tar wget unzip gzip psmisc nginx
 fi
 
 # 3. 创建配置文件目录
@@ -1319,7 +1302,7 @@ if [[ -f "/etc/mihomo/config.yaml" && -s "/etc/mihomo/config.yaml" ]]; then
 
 # --- 自定义出站重定向配置 (Sing-box 桥接) ---
 mixed-port: ${MIHOMO_PORT}
-external-controller: 0.0.0.0:${YACD_PORT}
+external-controller: '127.0.0.1:9090'
 secret: "${MIHOMO_SECRET}"
 external-ui: yacd
 # --- 自定义配置结束 ---
@@ -1330,13 +1313,19 @@ else
     exit 1
 fi
 
-# 8. 下载并安装 Argo 隧道（如启用）
-if is_enabled "$ENABLE_ARGO"; then
+# 8. 下载并安装 Argo 隧道
+if [[ -f /usr/local/bin/cloudflared ]]; then
+    log_info "检测到系统已安装 Cloudflared，跳过下载..."
+else
     log_info "正在下载 Cloudflared 客户端..."
     cf_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cpu}"
     wget -qO /usr/local/bin/cloudflared "$cf_url"
-    chmod +x /usr/local/bin/cloudflared
-    log_info "Cloudflared 安装成功：$(cloudflared --version)"
+    if [[ -f "/usr/local/bin/cloudflared" ]]; then
+        chmod +x /usr/local/bin/cloudflared
+        log_info "Cloudflared 安装成功：$(cloudflared --version)"
+    else
+        log_err "下载 Cloudflared 失败！"
+    fi
 fi
 
 # 9. 生成凭证证书与 Reality 密钥
@@ -1686,43 +1675,56 @@ cat > /etc/s-box/sb.json <<EOF
 }
 EOF
 
-# 12. 配置 Nginx 反代 (如启用 Argo)
-if is_enabled "$ENABLE_ARGO"; then
-    log_info "正在配置 Nginx..."
-    nginx_locations=""
-    if is_enabled "$ENABLE_VMESS"; then
-        nginx_locations="${nginx_locations}
-    location /${UUID}-vm {
-        proxy_redirect off;
-        proxy_pass http://127.0.0.1:${PORT_VMESS};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \"upgrade\";
-        proxy_set_header Host \$http_host;
-    }"
-    fi
+# 12. 配置 Nginx 反代
+log_info "正在配置 Nginx..."
+nginx_locations=""
+if is_enabled "$ENABLE_VMESS"; then
+    nginx_locations="${nginx_locations}
+location /${UUID}-vm {
+    proxy_redirect off;
+    proxy_pass http://127.0.0.1:${PORT_VMESS};
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection \"upgrade\";
+    proxy_set_header Host \$http_host;
+}"
+fi
 
-    if is_enabled "$ENABLE_TROJAN"; then
-        nginx_locations="${nginx_locations}
-    location /${UUID}-tr-argo {
-        proxy_redirect off;
-        proxy_pass http://127.0.0.1:${PORT_TROJAN_WS};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \"upgrade\";
-        proxy_set_header Host \$http_host;
-    }"
-    fi
+if is_enabled "$ENABLE_TROJAN"; then
+    nginx_locations="${nginx_locations}
+location /${UUID}-tr-argo {
+    proxy_redirect off;
+    proxy_pass http://127.0.0.1:${PORT_TROJAN_WS};
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection \"upgrade\";
+    proxy_set_header Host \$http_host;
+}"
+fi
 
-    cat > /etc/nginx/conf.d/singbox-argo.conf <<EOF
+cat > /etc/nginx/conf.d/singbox-argo.conf <<EOF
 server {
     listen 127.0.0.1:${PORT_NGINX};
     server_name localhost;
+
+    location / {
+        root /etc/mihomo/yacd;
+        index index.html;
+    }
+
+    location /api {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:9090;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$http_host;
+    }
+
     ${nginx_locations}
 }
 EOF
-    systemctl restart nginx
-fi
+systemctl restart nginx
 
 # 13. 创建 Systemd 守护服务
 log_info "正在注册 systemd 系统守护服务..."
@@ -1768,7 +1770,23 @@ systemctl enable sing-box mihomo
 systemctl restart sing-box mihomo
 
 # Argo 隧道服务
-if is_enabled "$ENABLE_ARGO"; then
+run_argo_setup=true
+if ! is_enabled "$ENABLE_ARGO"; then
+    run_argo_setup=false
+    # 如果用户不启用 Argo，停用并删除 argo 服务
+    systemctl stop argo-tunnel 2>/dev/null
+    systemctl disable argo-tunnel 2>/dev/null
+    rm -f /etc/systemd/system/argo-tunnel.service
+    rm -f /etc/s-box/argo.log
+elif [[ -f /etc/s-box/argo.log && -s /etc/s-box/argo.log ]] && systemctl is-active --quiet argo-tunnel; then
+    ARGO_DOMAIN=$(cat /etc/s-box/argo.log | tr -d ' \n\r')
+    if [[ -n "$ARGO_DOMAIN" && "$ARGO_DOMAIN" =~ \.trycloudflare\.com$ ]]; then
+        log_info "检测到已有 Argo 隧道正在运行中，复用临时域名: $ARGO_DOMAIN"
+        run_argo_setup=false
+    fi
+fi
+
+if [ "$run_argo_setup" = true ] && is_enabled "$ENABLE_ARGO"; then
     cat > /etc/systemd/system/argo-tunnel.service <<EOF
 [Unit]
 Description=Argo Tunnel Service
@@ -1788,7 +1806,7 @@ EOF
     systemctl enable argo-tunnel
     systemctl restart argo-tunnel
 
-    log_info "正在等待 Argo 隧道上线，获取节点临时域名..."
+    log_info "正在等待 Argo 隧道上线，获取节点及面板临时域名..."
     sleep 6
 
     ARGO_DOMAIN=""
@@ -1813,6 +1831,9 @@ cat > /etc/mihomo/update_sub.sh <<EOF
 
 export LANG=en_US.UTF-8
 
+MIHOMO_PORT=${MIHOMO_PORT}
+MIHOMO_SECRET="${MIHOMO_SECRET}"
+
 curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash_meta" -o /etc/mihomo/config.yaml.tmp "${SUB_URL}"
 if [[ -f /etc/mihomo/config.yaml.tmp && -s /etc/mihomo/config.yaml.tmp ]]; then
     # Base64 解密
@@ -1832,9 +1853,9 @@ if [[ -f /etc/mihomo/config.yaml.tmp && -s /etc/mihomo/config.yaml.tmp ]]; then
     cat <<EOF2 >> /etc/mihomo/config.yaml.tmp
 
 # --- 自定义出站重定向配置 (Sing-box 桥接) ---
-mixed-port: ${MIHOMO_PORT}
-external-controller: 0.0.0.0:${YACD_PORT}
-secret: "${MIHOMO_SECRET}"
+mixed-port: \${MIHOMO_PORT}
+external-controller: '127.0.0.1:9090'
+secret: "\${MIHOMO_SECRET}"
 external-ui: yacd
 # --- 自定义配置结束 ---
 EOF2
