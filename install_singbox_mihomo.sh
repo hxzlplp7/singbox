@@ -1297,7 +1297,7 @@ fi
 
 # 7. 下载并转换 Mihomo 节点订阅
 log_info "正在拉取 Clash 订阅配置..."
-curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash" -o /etc/mihomo/config.yaml "$SUB_URL"
+curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash_meta" -o /etc/mihomo/config.yaml "$SUB_URL"
 if [[ -f "/etc/mihomo/config.yaml" && -s "/etc/mihomo/config.yaml" ]]; then
     # Base64 自动解密
     if ! grep -q "proxies:" /etc/mihomo/config.yaml && ! grep -q "port:" /etc/mihomo/config.yaml; then
@@ -1813,7 +1813,7 @@ cat > /etc/mihomo/update_sub.sh <<EOF
 
 export LANG=en_US.UTF-8
 
-curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash" -o /etc/mihomo/config.yaml.tmp "${SUB_URL}"
+curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash_meta" -o /etc/mihomo/config.yaml.tmp "${SUB_URL}"
 if [[ -f /etc/mihomo/config.yaml.tmp && -s /etc/mihomo/config.yaml.tmp ]]; then
     # Base64 解密
     if ! grep -q "proxies:" /etc/mihomo/config.yaml.tmp && ! grep -q "port:" /etc/mihomo/config.yaml.tmp; then

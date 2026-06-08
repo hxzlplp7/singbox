@@ -121,7 +121,7 @@ log_info "Mihomo 内核安装成功：$(/usr/local/bin/mihomo -v)"
 
 # 5. 下载并解析订阅配置文件
 log_info "正在从订阅链接下载配置文件..."
-curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash" -o /etc/mihomo/config.yaml "$SUB_URL"
+curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash_meta" -o /etc/mihomo/config.yaml "$SUB_URL"
 
 if [[ ! -f "/etc/mihomo/config.yaml" || ! -s "/etc/mihomo/config.yaml" ]]; then
     log_err "配置文件下载为空或失败，请检查您的订阅链接是否可用。"
@@ -204,7 +204,7 @@ cat > /etc/mihomo/update_sub.sh <<EOF
 export LANG=en_US.UTF-8
 
 # 下载新订阅
-curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash" -o /etc/mihomo/config.yaml.tmp "${SUB_URL}"
+curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash_meta" -o /etc/mihomo/config.yaml.tmp "${SUB_URL}"
 if [[ -f /etc/mihomo/config.yaml.tmp && -s /etc/mihomo/config.yaml.tmp ]]; then
     # Base64 解码检查
     if ! grep -q "proxies:" /etc/mihomo/config.yaml.tmp && ! grep -q "port:" /etc/mihomo/config.yaml.tmp; then
