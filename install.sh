@@ -22,6 +22,30 @@ log_err() { echo -e "${RED}[错误] $1${PLAIN}"; }
 
 log_info "开始安装 Sing-box 多协议一键部署脚本..."
 
+# 检测是否已安装
+if [[ -f /etc/s-box/sb.json ]]; then
+    echo "=================================================="
+    echo "          检测到已安装 Sing-box 服务"
+    echo "=================================================="
+    echo "1. 进入 Sing-box 快捷管理菜单 (直接回车)"
+    echo "2. 重新安装/更新 Sing-box 服务"
+    echo "0. 退出"
+    echo "=================================================="
+    read -p "请选择操作 [0-2, 默认1]: " init_choice
+    [[ -z "$init_choice" ]] && init_choice=1
+    
+    if [[ "$init_choice" == "1" ]]; then
+        if [[ -f /usr/local/bin/sb ]]; then
+            bash /usr/local/bin/sb
+            exit 0
+        else
+            log_warn "未找到快捷管理工具 /usr/local/bin/sb，自动进入安装流程。"
+        fi
+    elif [[ "$init_choice" == "0" ]]; then
+        exit 0
+    fi
+fi
+
 # 节点配置默认值
 ENABLE_VLESS="y"
 ENABLE_VMESS="y"
