@@ -105,7 +105,7 @@ server {
         index index.html;
     }
 
-    location /api {
+    location ~* ^/(version|configs|proxies|rules|connections|logs|traffic|providers|dns|restart) {
         proxy_redirect off;
         proxy_pass http://127.0.0.1:9090;
         proxy_http_version 1.1;
@@ -320,10 +320,9 @@ EOF2
     echo "------------------【出站桥接】--------------------" >> /etc/s-box/info.log
     echo "本地出站 Mihomo (Socks5) 端口: ${mihomo_port}" >> /etc/s-box/info.log
     if [[ -n "$argo_domain" ]]; then
-        echo "yacd 控制面板访问地址: https://${argo_domain}" >> /etc/s-box/info.log
-        echo "yacd API 连接地址(Host): https://${argo_domain}/api" >> /etc/s-box/info.log
+        echo "yacd 一键免密直连地址: https://${argo_domain}/?hostname=${argo_domain}&port=443&secret=${yacd_secret}&https=true#/proxies" >> /etc/s-box/info.log
     else
-        echo "yacd 控制面板访问地址: (等待Argo隧道上线获取域名...)" >> /etc/s-box/info.log
+        echo "yacd 一键免密局域网地址: http://${ip}:8401/?hostname=${ip}&port=8401&secret=${yacd_secret}#/proxies" >> /etc/s-box/info.log
     fi
     echo "yacd 连接密码/密钥: ${yacd_secret}" >> /etc/s-box/info.log
     echo "==================================================" >> /etc/s-box/info.log
@@ -1716,7 +1715,7 @@ server {
         index index.html;
     }
 
-    location /api {
+    location ~* ^/(version|configs|proxies|rules|connections|logs|traffic|providers|dns|restart) {
         proxy_redirect off;
         proxy_pass http://127.0.0.1:9090;
         proxy_http_version 1.1;

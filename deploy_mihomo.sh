@@ -213,7 +213,7 @@ server {
         index index.html;
     }
 
-    location /api {
+    location ~* ^/(version|configs|proxies|rules|connections|logs|traffic|providers|dns|restart) {
         proxy_redirect off;
         proxy_pass http://127.0.0.1:9090;
         proxy_http_version 1.1;
@@ -354,23 +354,26 @@ fi
 # 输出完成信息
 ARGO_DOMAIN=""
 if [[ -f /etc/s-box/argo.log ]]; then
-    ARGO_DOMAIN=$(cat /etc/s-box/argo.log)
+    ARGO_DOMAIN=$(cat /etc/s-box/argo.log | tr -d ' \n\r')
 fi
+
+IPV4=$(curl -s4m5 icanhazip.com || curl -s4m5 api.ipify.org)
+IPV6=$(curl -s6m5 icanhazip.com || curl -s6m5 api6.ipify.org)
+IP=${IPV4:-$IPV6}
 
 echo ""
 echo "=================================================="
 echo "      Mihomo (Clash Meta) 部署安装成功"
 echo "=================================================="
 echo "1. 本地监听的 Socks5 端口: ${MIHOMO_PORT} (用于对接 Sing-box 出站)"
-if [[ -n "$ARGO_DOMAIN" ]]; then
-    echo "2. yacd 外部控制面板地址: https://${ARGO_DOMAIN}"
-    echo "3. yacd API 连接地址(Host): https://${ARGO_DOMAIN}/api"
+if [[ -n "$ARGO_DOMAIN" && "$ARGO_DOMAIN" =~ \.trycloudflare\.com$ ]]; then
+    echo "2. yacd 一键免密直连地址: https://${ARGO_DOMAIN}/?hostname=${ARGO_DOMAIN}&port=443&secret=${MIHOMO_SECRET}&https=true#/proxies"
 else
-    echo "2. yacd 外部控制面板地址: (等待Argo隧道上线获取域名...)"
+    echo "2. yacd 一键免密局域网地址: http://${IP}:8401/?hostname=${IP}&port=8401&secret=${MIHOMO_SECRET}#/proxies"
 fi
-echo "4. yacd 面板安全密钥/密码: ${MIHOMO_SECRET}"
+echo "3. yacd 面板连接密钥/密码: ${MIHOMO_SECRET}"
 echo ""
 echo "💡 使用说明："
-echo "在浏览器打开上述 yacd 地址，在 API 地址栏中填入面板 API 连接地址(Host)，输入 Secret (${MIHOMO_SECRET}) 即可进行分流节点切换与网络监控。"
+echo "直接按住 Ctrl 点击上方的一键免密链接，即可免输入直接进入 yacd 节点策略切换界面。"
 echo "=================================================="
 echo ""
