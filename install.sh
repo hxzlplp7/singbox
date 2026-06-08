@@ -706,14 +706,830 @@ echo "==================================================" >> /etc/s-box/info.log
 
 # 创建 sb 快捷管理工具
 log_info "正在生成快捷管理工具 sb..."
-cat > /usr/local/bin/sb <<EOF
+cat > /usr/local/bin/sb <<'EOF'
 #!/bin/bash
 # Sing-box 极简快捷管理工具
 
-if [[ \$EUID -ne 0 ]]; then
+if [[ $EUID -ne 0 ]]; then
    echo "错误：必须以 root 权限运行此脚本！"
    exit 1
 fi
+
+# 重新生成 Nginx 配置
+regenerate_nginx_conf() {
+    if [[ ! -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
+        return
+    fi
+    
+    local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" /etc/nginx/conf.d/singbox-argo.conf | head -n 1 | awk -F: '{print $2}')
+    [[ -z "$port_nginx" ]] && port_nginx=8401
+    
+    local nginx_locations=""
+    
+    # 检查 VMess WS
+    if jq -e '.inbounds[] | select(.tag=="vmess-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+        local vmess_port=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .listen_port' /etc/s-box/sb.json)
+        local vmess_path=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .transport.path' /etc/s-box/sb.json)
+        nginx_locations="${nginx_locations}
+    location ${vmess_path} {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:${vmess_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \"upgrade\";
+        proxy_set_header Host \$http_host;
+    }"
+    fi
+    
+    # 检查 Trojan WS
+    if jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+        local trojan_ws_port=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .listen_port' /etc/s-box/sb.json)
+        local trojan_ws_path=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
+        nginx_locations="${nginx_locations}
+    location ${trojan_ws_path} {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:${trojan_ws_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \"upgrade\";
+        proxy_set_header Host \$http_host;
+    }"
+    fi
+    
+    cat > /etc/nginx/conf.d/singbox-argo.conf <<EOF2
+server {
+    listen 127.0.0.1:${port_nginx};
+    server_name localhost;
+    ${nginx_locations}
+}
+EOF2
+    systemctl restart nginx >/dev/null 2>&1
+}
+
+# 重新生成 info.log 分享链接
+regenerate_info_log() {
+    local ipv4=$(curl -s4m5 icanhazip.com || curl -s4m5 api.ipify.org)
+    local ipv6=$(curl -s6m5 icanhazip.com || curl -s6m5 api6.ipify.org)
+    local ip=${ipv4:-$ipv6}
+    
+    local uuid=$(jq -r '.. | .uuid? // .password? | select(. != null)' /etc/s-box/sb.json | head -n 1)
+    
+    local public_key=""
+    if [[ -f /etc/s-box/public.key ]]; then
+        public_key=$(cat /etc/s-box/public.key)
+    fi
+    local short_id=$(jq -r '.inbounds[] | select(.tag=="vless-in") | .tls.reality.short_id[0] // empty' /etc/s-box/sb.json)
+    
+    local argo_domain=""
+    if [[ -f /etc/s-box/argo.log ]]; then
+        argo_domain=$(cat /etc/s-box/argo.log)
+    fi
+
+    cat > /etc/s-box/info.log <<EOF2
+==================================================
+        Sing-box 多协议一键部署脚本 安装成功
+==================================================
+通用密码/UUID: ${uuid}
+
+------------------【直连节点】--------------------
+EOF2
+
+    # 1. VLESS-Reality
+    if jq -e '.inbounds[] | select(.tag=="vless-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+        local port_vless=$(jq -r '.inbounds[] | select(.tag=="vless-in") | .listen_port' /etc/s-box/sb.json)
+        local uuid_vless=$(jq -r '.inbounds[] | select(.tag=="vless-in") | .users[0].uuid' /etc/s-box/sb.json)
+        local sni_vless=$(jq -r '.inbounds[] | select(.tag=="vless-in") | .tls.server_name' /etc/s-box/sb.json)
+        local vless_link="vless://${uuid_vless}@${ip}:${port_vless}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni_vless}&fp=chrome&pbk=${public_key}&sid=${short_id}#SB-VLESS-Reality"
+        echo "1. VLESS-Reality:" >> /etc/s-box/info.log
+        echo "${vless_link}" >> /etc/s-box/info.log
+        echo "" >> /etc/s-box/info.log
+    fi
+
+    # 2. VMess-WS
+    if jq -e '.inbounds[] | select(.tag=="vmess-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+        local port_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .listen_port' /etc/s-box/sb.json)
+        local uuid_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .users[0].uuid' /etc/s-box/sb.json)
+        local path_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .transport.path' /etc/s-box/sb.json)
+        local vmess_json=$(cat <<EOF2
+{
+  "v": "2",
+  "ps": "SB-VMess-WS",
+  "add": "${ip}",
+  "port": "${port_vmess}",
+  "id": "${uuid_vmess}",
+  "aid": "0",
+  "scy": "auto",
+  "net": "ws",
+  "type": "none",
+  "host": "",
+  "path": "${path_vmess}",
+  "tls": "none",
+  "sni": ""
+}
+EOF2
+)
+        local vmess_link="vmess://$(echo -n "$vmess_json" | base64 -w 0)"
+        echo "2. VMess-WS (无TLS):" >> /etc/s-box/info.log
+        echo "${vmess_link}" >> /etc/s-box/info.log
+        echo "" >> /etc/s-box/info.log
+    fi
+
+    # 3. Trojan-WS-TLS
+    if jq -e '.inbounds[] | select(.tag=="trojan-tls-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+        local port_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .listen_port' /etc/s-box/sb.json)
+        local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .users[0].password' /etc/s-box/sb.json)
+        local sni_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .tls.server_name' /etc/s-box/sb.json)
+        local path_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .transport.path' /etc/s-box/sb.json)
+        local path_trojan_encoded=$(echo -n "$path_trojan" | jq -sRr @uri)
+        local trojan_link="trojan://${pass_trojan}@${ip}:${port_trojan}?security=tls&sni=${sni_trojan}&allowInsecure=1&type=ws&path=${path_trojan_encoded}#SB-Trojan-WS-TLS"
+        echo "3. Trojan-WS-TLS (自签证书):" >> /etc/s-box/info.log
+        echo "${trojan_link}" >> /etc/s-box/info.log
+        echo "" >> /etc/s-box/info.log
+    fi
+
+    # 4. Hysteria2
+    if jq -e '.inbounds[] | select(.tag=="hy2-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+        local port_hy2=$(jq -r '.inbounds[] | select(.tag=="hy2-in") | .listen_port' /etc/s-box/sb.json)
+        local pass_hy2=$(jq -r '.inbounds[] | select(.tag=="hy2-in") | .users[0].password' /etc/s-box/sb.json)
+        local hy2_link="hysteria2://${pass_hy2}@${ip}:${port_hy2}?insecure=1&sni=www.bing.com#SB-Hysteria2"
+        echo "4. Hysteria2:" >> /etc/s-box/info.log
+        echo "${hy2_link}" >> /etc/s-box/info.log
+        echo "" >> /etc/s-box/info.log
+    fi
+
+    # 5. TUIC v5
+    if jq -e '.inbounds[] | select(.tag=="tuic-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+        local port_tuic=$(jq -r '.inbounds[] | select(.tag=="tuic-in") | .listen_port' /etc/s-box/sb.json)
+        local uuid_tuic=$(jq -r '.inbounds[] | select(.tag=="tuic-in") | .users[0].uuid' /etc/s-box/sb.json)
+        local pass_tuic=$(jq -r '.inbounds[] | select(.tag=="tuic-in") | .users[0].password' /etc/s-box/sb.json)
+        local tuic_link="tuic://${uuid_tuic}:${pass_tuic}@${ip}:${port_tuic}?alpn=h3&congestion_control=bbr&udp_relay=1&allow_insecure=1#SB-TUIC-v5"
+        echo "5. TUIC v5:" >> /etc/s-box/info.log
+        echo "${tuic_link}" >> /etc/s-box/info.log
+        echo "" >> /etc/s-box/info.log
+    fi
+
+    # 6. AnyTLS
+    if jq -e '.inbounds[] | select(.tag=="anytls-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+        local port_anytls=$(jq -r '.inbounds[] | select(.tag=="anytls-in") | .listen_port' /etc/s-box/sb.json)
+        local pass_anytls=$(jq -r '.inbounds[] | select(.tag=="anytls-in") | .users[0].password' /etc/s-box/sb.json)
+        local sni_anytls=$(jq -r '.inbounds[] | select(.tag=="anytls-in") | .tls.server_name' /etc/s-box/sb.json)
+        local anytls_link="anytls://${pass_anytls}@${ip}:${port_anytls}?security=tls&sni=${sni_anytls}&allowInsecure=1#SB-AnyTLS"
+        echo "6. AnyTLS:" >> /etc/s-box/info.log
+        echo "${anytls_link}" >> /etc/s-box/info.log
+        echo "" >> /etc/s-box/info.log
+    fi
+
+    # Argo
+    if [[ -n "$argo_domain" ]]; then
+        echo "------------------【Argo穿透】--------------------" >> /etc/s-box/info.log
+        echo "Argo 临时域名: ${argo_domain}" >> /etc/s-box/info.log
+        echo "" >> /etc/s-box/info.log
+
+        if jq -e '.inbounds[] | select(.tag=="vmess-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+            local uuid_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .users[0].uuid' /etc/s-box/sb.json)
+            local path_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .transport.path' /etc/s-box/sb.json)
+            local vmess_argo_json=$(cat <<EOF2
+{
+  "v": "2",
+  "ps": "SB-VMess-Argo-80",
+  "add": "cdn.2020111.xyz",
+  "port": "80",
+  "id": "${uuid_vmess}",
+  "aid": "0",
+  "scy": "auto",
+  "net": "ws",
+  "type": "none",
+  "host": "${argo_domain}",
+  "path": "${path_vmess}",
+  "tls": "none",
+  "sni": ""
+}
+EOF2
+)
+            local vmess_argo_80_link="vmess://$(echo -n "$vmess_argo_json" | base64 -w 0)"
+
+            local vmess_argo_tls_json=$(cat <<EOF2
+{
+  "v": "2",
+  "ps": "SB-VMess-Argo-443",
+  "add": "cdn.2020111.xyz",
+  "port": "443",
+  "id": "${uuid_vmess}",
+  "aid": "0",
+  "scy": "auto",
+  "net": "ws",
+  "type": "none",
+  "host": "${argo_domain}",
+  "path": "${path_vmess}",
+  "tls": "tls",
+  "sni": "${argo_domain}"
+}
+EOF2
+)
+            local vmess_argo_443_link="vmess://$(echo -n "$vmess_argo_tls_json" | base64 -w 0)"
+
+            echo "1. VMess Argo (80端口):" >> /etc/s-box/info.log
+            echo "${vmess_argo_80_link}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+            echo "2. VMess Argo (443端口/TLS):" >> /etc/s-box/info.log
+            echo "${vmess_argo_443_link}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+        fi
+
+        if jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+            local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .users[0].password' /etc/s-box/sb.json)
+            local path_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
+            local path_trojan_ws_encoded=$(echo -n "$path_trojan_ws" | jq -sRr @uri)
+            
+            local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-80"
+            local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${argo_domain}&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-443"
+
+            echo "3. Trojan Argo (80端口):" >> /etc/s-box/info.log
+            echo "${trojan_argo_80_link}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+            echo "4. Trojan Argo (443端口/TLS):" >> /etc/s-box/info.log
+            echo "${trojan_argo_443_link}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+        fi
+    fi
+
+    echo "==================================================" >> /etc/s-box/info.log
+}
+
+apply_changes() {
+    echo "正在应用更改，重启 Sing-box 服务..."
+    systemctl restart sing-box
+    
+    if [[ -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
+        echo "正在重启 Nginx 和 Argo 服务..."
+        regenerate_nginx_conf
+        systemctl restart argo-tunnel 2>/dev/null
+    fi
+    
+    regenerate_info_log
+    echo "更改已成功应用并重启服务！"
+}
+
+check_port() {
+    local port=$1
+    if ss -tunlp | grep -q ":$port "; then
+        return 1
+    else
+        return 0
+    fi
+}
+
+modify_vless() {
+    while true; do
+        local cur_port=$(jq -r '.inbounds[] | select(.tag=="vless-in") | .listen_port' /etc/s-box/sb.json)
+        local cur_uuid=$(jq -r '.inbounds[] | select(.tag=="vless-in") | .users[0].uuid' /etc/s-box/sb.json)
+        local cur_sni=$(jq -r '.inbounds[] | select(.tag=="vless-in") | .tls.server_name' /etc/s-box/sb.json)
+        local cur_dest=$(jq -r '.inbounds[] | select(.tag=="vless-in") | .tls.reality.handshake.server' /etc/s-box/sb.json)
+        local cur_dest_port=$(jq -r '.inbounds[] | select(.tag=="vless-in") | .tls.reality.handshake.server_port' /etc/s-box/sb.json)
+        
+        echo "--------------------------------------------------"
+        echo "          VLESS-Reality 参数修改"
+        echo "--------------------------------------------------"
+        echo "1. 修改监听端口 (当前: $cur_port)"
+        echo "2. 修改 UUID (当前: $cur_uuid)"
+        echo "3. 修改 SNI 域名 (当前: $cur_sni)"
+        echo "4. 修改目标 IP/强绑定域名 (当前: $cur_dest:$cur_dest_port)"
+        echo "0. 返回"
+        echo "--------------------------------------------------"
+        read -p "请选择修改项 [0-4]: " vless_choice
+        
+        if [[ "$vless_choice" == "0" || -z "$vless_choice" ]]; then
+            break
+        fi
+        
+        case $vless_choice in
+            1)
+                read -p "请输入新端口: " new_port
+                if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
+                    if ss -tunlp | grep -q ":$new_port " && [ "$new_port" -ne "$cur_port" ]; then
+                        echo "警告：端口 $new_port 已被占用！"
+                    else
+                        local temp_json=$(mktemp)
+                        jq --argjson port "$new_port" '(.inbounds[] | select(.tag=="vless-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        echo "端口修改成功，新端口: $new_port"
+                        apply_changes
+                    fi
+                else
+                    echo "无效端口！"
+                fi
+                ;;
+            2)
+                read -p "请输入新 UUID (留空随机生成): " new_uuid
+                if [[ -z "$new_uuid" ]]; then
+                    new_uuid=$(/etc/s-box/sing-box generate uuid)
+                fi
+                local temp_json=$(mktemp)
+                jq --arg uuid "$new_uuid" '(.inbounds[] | select(.tag=="vless-in") | .users[0].uuid) = $uuid' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                echo "UUID 修改成功，新 UUID: $new_uuid"
+                apply_changes
+                ;;
+            3)
+                read -p "请输入新 SNI 域名: " new_sni
+                if [[ -n "$new_sni" ]]; then
+                    local temp_json=$(mktemp)
+                    jq --arg sni "$new_sni" '(.inbounds[] | select(.tag=="vless-in") | .tls.server_name) = $sni' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                    echo "SNI 修改成功，新 SNI: $new_sni"
+                    apply_changes
+                else
+                    echo "域名不能为空！"
+                fi
+                ;;
+            4)
+                read -p "请输入新目标域名/IP: " new_dest
+                read -p "请输入新目标端口 [默认 443]: " new_dest_port
+                [[ -z "$new_dest_port" ]] && new_dest_port=443
+                if [[ -n "$new_dest" ]]; then
+                    local temp_json=$(mktemp)
+                    jq --arg dest "$new_dest" --argjson dest_port "$new_dest_port" '
+                        (.inbounds[] | select(.tag=="vless-in") | .tls.reality.handshake.server) = $dest |
+                        (.inbounds[] | select(.tag=="vless-in") | .tls.reality.handshake.server_port) = $dest_port
+                    ' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                    echo "目标修改成功，新目标: $new_dest:$new_dest_port"
+                    apply_changes
+                else
+                    echo "目标不能为空！"
+                fi
+                ;;
+            *)
+                echo "无效选项！"
+                ;;
+        esac
+    done
+}
+
+modify_vmess() {
+    while true; do
+        local cur_port=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .listen_port' /etc/s-box/sb.json)
+        local cur_uuid=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .users[0].uuid' /etc/s-box/sb.json)
+        local cur_path=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .transport.path' /etc/s-box/sb.json)
+        
+        echo "--------------------------------------------------"
+        echo "          VMess-WS 参数修改"
+        echo "--------------------------------------------------"
+        echo "1. 修改监听端口 (当前: $cur_port)"
+        echo "2. 修改 UUID (当前: $cur_uuid)"
+        echo "3. 修改 WS 路径 (当前: $cur_path)"
+        echo "0. 返回"
+        echo "--------------------------------------------------"
+        read -p "请选择修改项 [0-3]: " vmess_choice
+        
+        if [[ "$vmess_choice" == "0" || -z "$vmess_choice" ]]; then
+            break
+        fi
+        
+        case $vmess_choice in
+            1)
+                read -p "请输入新端口: " new_port
+                if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
+                    if ss -tunlp | grep -q ":$new_port " && [ "$new_port" -ne "$cur_port" ]; then
+                        echo "警告：端口 $new_port 已被占用！"
+                    else
+                        local temp_json=$(mktemp)
+                        jq --argport port "$new_port" '(.inbounds[] | select(.tag=="vmess-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        echo "端口修改成功，新端口: $new_port"
+                        apply_changes
+                    fi
+                else
+                    echo "无效端口！"
+                fi
+                ;;
+            2)
+                read -p "请输入新 UUID (留空随机生成): " new_uuid
+                if [[ -z "$new_uuid" ]]; then
+                    new_uuid=$(/etc/s-box/sing-box generate uuid)
+                fi
+                local temp_json=$(mktemp)
+                jq --arg uuid "$new_uuid" '(.inbounds[] | select(.tag=="vmess-in") | .users[0].uuid) = $uuid' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                echo "UUID 修改成功，新 UUID: $new_uuid"
+                apply_changes
+                ;;
+            3)
+                read -p "请输入新 WS 路径 (必须以 / 开头，例如 /my-path): " new_path
+                if [[ -n "$new_path" ]]; then
+                    if [[ ! "$new_path" =~ ^/ ]]; then
+                        new_path="/${new_path}"
+                    fi
+                    local temp_json=$(mktemp)
+                    jq --arg path "$new_path" '(.inbounds[] | select(.tag=="vmess-in") | .transport.path) = $path' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                    echo "WS 路径修改成功，新路径: $new_path"
+                    apply_changes
+                else
+                    echo "路径不能为空！"
+                fi
+                ;;
+            *)
+                echo "无效选项！"
+                ;;
+        esac
+    done
+}
+
+modify_trojan() {
+    while true; do
+        local cur_port=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .listen_port' /etc/s-box/sb.json)
+        local cur_pass=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .users[0].password' /etc/s-box/sb.json)
+        local cur_sni=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .tls.server_name' /etc/s-box/sb.json)
+        local cur_path=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .transport.path' /etc/s-box/sb.json)
+        
+        local has_trojan_ws=false
+        local cur_ws_port=""
+        local cur_ws_path=""
+        if jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+            has_trojan_ws=true
+            cur_ws_port=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .listen_port' /etc/s-box/sb.json)
+            cur_ws_path=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
+        fi
+        
+        echo "--------------------------------------------------"
+        echo "          Trojan-WS-TLS 参数修改"
+        echo "--------------------------------------------------"
+        echo "1. 修改监听端口 (当前: $cur_port)"
+        echo "2. 修改 密码 (当前: $cur_pass)"
+        echo "3. 修改 伪装域名 (当前: $cur_sni)"
+        echo "4. 修改 WS 路径 (当前: $cur_path)"
+        if $has_trojan_ws; then
+            echo "5. 修改 Argo 内部 Trojan-WS 端口 (当前: $cur_ws_port)"
+            echo "6. 修改 Argo 内部 Trojan-WS 路径 (当前: $cur_ws_path)"
+        fi
+        echo "0. 返回"
+        echo "--------------------------------------------------"
+        local max_opt=4
+        if $has_trojan_ws; then
+            max_opt=6
+        fi
+        read -p "请选择修改项 [0-$max_opt]: " trojan_choice
+        
+        if [[ "$trojan_choice" == "0" || -z "$trojan_choice" ]]; then
+            break
+        fi
+        
+        case $trojan_choice in
+            1)
+                read -p "请输入新端口: " new_port
+                if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
+                    if ss -tunlp | grep -q ":$new_port " && [ "$new_port" -ne "$cur_port" ]; then
+                        echo "警告：端口 $new_port 已被占用！"
+                    else
+                        local temp_json=$(mktemp)
+                        jq --argport port "$new_port" '(.inbounds[] | select(.tag=="trojan-tls-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        echo "端口修改成功，新端口: $new_port"
+                        apply_changes
+                    fi
+                else
+                    echo "无效端口！"
+                fi
+                ;;
+            2)
+                read -p "请输入新密码: " new_pass
+                if [[ -n "$new_pass" ]]; then
+                    local temp_json=$(mktemp)
+                    if $has_trojan_ws; then
+                        jq --arg password "$new_pass" '
+                            ((.inbounds[] | select(.tag=="trojan-tls-in") | .users[0].password) = $password) |
+                            ((.inbounds[] | select(.tag=="trojan-ws-in") | .users[0].password) = $password)
+                        ' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                    else
+                        jq --arg password "$new_pass" '(.inbounds[] | select(.tag=="trojan-tls-in") | .users[0].password) = $password' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                    fi
+                    echo "密码修改成功，新密码: $new_pass"
+                    apply_changes
+                else
+                    echo "密码不能为空！"
+                fi
+                ;;
+            3)
+                read -p "请输入新伪装域名: " new_sni
+                if [[ -n "$new_sni" ]]; then
+                    local temp_json=$(mktemp)
+                    jq --arg sni "$new_sni" '(.inbounds[] | select(.tag=="trojan-tls-in") | .tls.server_name) = $sni' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                    echo "伪装域名修改成功，新伪装域名: $new_sni"
+                    apply_changes
+                else
+                    echo "域名不能为空！"
+                fi
+                ;;
+            4)
+                read -p "请输入新 WS 路径 (必须以 / 开头，例如 /my-path): " new_path
+                if [[ -n "$new_path" ]]; then
+                    if [[ ! "$new_path" =~ ^/ ]]; then
+                        new_path="/${new_path}"
+                    fi
+                    local temp_json=$(mktemp)
+                    jq --arg path "$new_path" '(.inbounds[] | select(.tag=="trojan-tls-in") | .transport.path) = $path' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                    echo "WS 路径修改成功，新路径: $new_path"
+                    apply_changes
+                else
+                    echo "路径不能为空！"
+                fi
+                ;;
+            5)
+                if $has_trojan_ws; then
+                    read -p "请输入新 Argo 内部 Trojan-WS 端口: " new_port
+                    if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
+                        if ss -tunlp | grep -q ":$new_port " && [ "$new_port" -ne "$cur_ws_port" ]; then
+                            echo "警告：端口 $new_port 已被占用！"
+                        else
+                            local temp_json=$(mktemp)
+                            jq --argport port "$new_port" '(.inbounds[] | select(.tag=="trojan-ws-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                            echo "Argo 内部 Trojan-WS 端口修改成功，新端口: $new_port"
+                            apply_changes
+                        fi
+                    else
+                        echo "无效端口！"
+                    fi
+                else
+                    echo "无效选项！"
+                fi
+                ;;
+            6)
+                if $has_trojan_ws; then
+                    read -p "请输入新 Argo 内部 Trojan-WS 路径 (必须以 / 开头): " new_path
+                    if [[ -n "$new_path" ]]; then
+                        if [[ ! "$new_path" =~ ^/ ]]; then
+                            new_path="/${new_path}"
+                        fi
+                        local temp_json=$(mktemp)
+                        jq --arg path "$new_path" '(.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path) = $path' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        echo "Argo 内部 Trojan-WS 路径修改成功，新路径: $new_path"
+                        apply_changes
+                    else
+                        echo "路径不能为空！"
+                    fi
+                else
+                    echo "无效选项！"
+                fi
+                ;;
+            *)
+                echo "无效选项！"
+                ;;
+        esac
+    done
+}
+
+modify_hy2() {
+    while true; do
+        local cur_port=$(jq -r '.inbounds[] | select(.tag=="hy2-in") | .listen_port' /etc/s-box/sb.json)
+        local cur_pass=$(jq -r '.inbounds[] | select(.tag=="hy2-in") | .users[0].password' /etc/s-box/sb.json)
+        
+        echo "--------------------------------------------------"
+        echo "          Hysteria2 参数修改"
+        echo "--------------------------------------------------"
+        echo "1. 修改监听端口 (当前: $cur_port)"
+        echo "2. 修改 密码 (当前: $cur_pass)"
+        echo "0. 返回"
+        echo "--------------------------------------------------"
+        read -p "请选择修改项 [0-2]: " hy2_choice
+        
+        if [[ "$hy2_choice" == "0" || -z "$hy2_choice" ]]; then
+            break
+        fi
+        
+        case $hy2_choice in
+            1)
+                read -p "请输入新端口: " new_port
+                if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
+                    if ss -tunlp | grep -q ":$new_port " && [ "$new_port" -ne "$cur_port" ]; then
+                        echo "警告：端口 $new_port 已被占用！"
+                    else
+                        local temp_json=$(mktemp)
+                        jq --argport port "$new_port" '(.inbounds[] | select(.tag=="hy2-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        echo "端口修改成功，新端口: $new_port"
+                        apply_changes
+                    fi
+                else
+                    echo "无效端口！"
+                fi
+                ;;
+            2)
+                read -p "请输入新密码: " new_pass
+                if [[ -n "$new_pass" ]]; then
+                    local temp_json=$(mktemp)
+                    jq --arg password "$new_pass" '(.inbounds[] | select(.tag=="hy2-in") | .users[0].password) = $password' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                    echo "密码修改成功，新密码: $new_pass"
+                    apply_changes
+                else
+                    echo "密码不能为空！"
+                fi
+                ;;
+            *)
+                echo "无效选项！"
+                ;;
+        esac
+    done
+}
+
+modify_tuic() {
+    while true; do
+        local cur_port=$(jq -r '.inbounds[] | select(.tag=="tuic-in") | .listen_port' /etc/s-box/sb.json)
+        local cur_uuid=$(jq -r '.inbounds[] | select(.tag=="tuic-in") | .users[0].uuid' /etc/s-box/sb.json)
+        
+        echo "--------------------------------------------------"
+        echo "          TUIC v5 参数修改"
+        echo "--------------------------------------------------"
+        echo "1. 修改监听端口 (当前: $cur_port)"
+        echo "2. 修改 UUID/密码 (当前: $cur_uuid)"
+        echo "0. 返回"
+        echo "--------------------------------------------------"
+        read -p "请选择修改项 [0-2]: " tuic_choice
+        
+        if [[ "$tuic_choice" == "0" || -z "$tuic_choice" ]]; then
+            break
+        fi
+        
+        case $tuic_choice in
+            1)
+                read -p "请输入新端口: " new_port
+                if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
+                    if ss -tunlp | grep -q ":$new_port " && [ "$new_port" -ne "$cur_port" ]; then
+                        echo "警告：端口 $new_port 已被占用！"
+                    else
+                        local temp_json=$(mktemp)
+                        jq --argport port "$new_port" '(.inbounds[] | select(.tag=="tuic-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        echo "端口修改成功，新端口: $new_port"
+                        apply_changes
+                    fi
+                else
+                    echo "无效端口！"
+                fi
+                ;;
+            2)
+                read -p "请输入新 UUID/密码 (留空随机生成): " new_uuid
+                if [[ -z "$new_uuid" ]]; then
+                    new_uuid=$(/etc/s-box/sing-box generate uuid)
+                fi
+                local temp_json=$(mktemp)
+                jq --arg uuid "$new_uuid" '
+                    (.inbounds[] | select(.tag=="tuic-in") | .users[0].uuid) = $uuid |
+                    (.inbounds[] | select(.tag=="tuic-in") | .users[0].password) = $uuid
+                ' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                echo "UUID/密码 修改成功，新 UUID/密码: $new_uuid"
+                apply_changes
+                ;;
+            *)
+                echo "无效选项！"
+                ;;
+        esac
+    done
+}
+
+modify_anytls() {
+    while true; do
+        local cur_port=$(jq -r '.inbounds[] | select(.tag=="anytls-in") | .listen_port' /etc/s-box/sb.json)
+        local cur_pass=$(jq -r '.inbounds[] | select(.tag=="anytls-in") | .users[0].password' /etc/s-box/sb.json)
+        local cur_sni=$(jq -r '.inbounds[] | select(.tag=="anytls-in") | .tls.server_name' /etc/s-box/sb.json)
+        
+        echo "--------------------------------------------------"
+        echo "          AnyTLS 参数修改"
+        echo "--------------------------------------------------"
+        echo "1. 修改监听端口 (当前: $cur_port)"
+        echo "2. 修改 密码 (当前: $cur_pass)"
+        echo "3. 修改 伪装域名 (当前: $cur_sni)"
+        echo "0. 返回"
+        echo "--------------------------------------------------"
+        read -p "请选择修改项 [0-3]: " anytls_choice
+        
+        if [[ "$anytls_choice" == "0" || -z "$anytls_choice" ]]; then
+            break
+        fi
+        
+        case $anytls_choice in
+            1)
+                read -p "请输入新端口: " new_port
+                if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
+                    if ss -tunlp | grep -q ":$new_port " && [ "$new_port" -ne "$cur_port" ]; then
+                        echo "警告：端口 $new_port 已被占用！"
+                    else
+                        local temp_json=$(mktemp)
+                        jq --argport port "$new_port" '(.inbounds[] | select(.tag=="anytls-in") | .listen_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                        echo "端口修改成功，新端口: $new_port"
+                        apply_changes
+                    fi
+                else
+                    echo "无效端口！"
+                fi
+                ;;
+            2)
+                read -p "请输入新密码: " new_pass
+                if [[ -n "$new_pass" ]]; then
+                    local temp_json=$(mktemp)
+                    jq --arg password "$new_pass" '(.inbounds[] | select(.tag=="anytls-in") | .users[0].password) = $password' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                    echo "密码修改成功，新密码: $new_pass"
+                    apply_changes
+                else
+                    echo "密码不能为空！"
+                fi
+                ;;
+            3)
+                read -p "请输入新伪装域名: " new_sni
+                if [[ -n "$new_sni" ]]; then
+                    local temp_json=$(mktemp)
+                    jq --arg sni "$new_sni" '(.inbounds[] | select(.tag=="anytls-in") | .tls.server_name) = $sni' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
+                    echo "伪装域名修改成功，新伪装域名: $new_sni"
+                    apply_changes
+                else
+                    echo "域名不能为空！"
+                fi
+                ;;
+            *)
+                echo "无效选项！"
+                ;;
+        esac
+    done
+}
+
+modify_node_params() {
+    if [[ ! -f /etc/s-box/sb.json ]]; then
+        echo "错误：未找到配置文件 /etc/s-box/sb.json"
+        return
+    fi
+
+    while true; do
+        echo "=================================================="
+        echo "          修改已搭建节点参数"
+        echo "=================================================="
+        
+        local has_vless=false
+        local has_vmess=false
+        local has_trojan=false
+        local has_hy2=false
+        local has_tuic=false
+        local has_anytls=false
+        
+        jq -e '.inbounds[] | select(.tag=="vless-in")' /etc/s-box/sb.json >/dev/null 2>&1 && has_vless=true
+        jq -e '.inbounds[] | select(.tag=="vmess-in")' /etc/s-box/sb.json >/dev/null 2>&1 && has_vmess=true
+        jq -e '.inbounds[] | select(.tag=="trojan-tls-in")' /etc/s-box/sb.json >/dev/null 2>&1 && has_trojan=true
+        jq -e '.inbounds[] | select(.tag=="hy2-in")' /etc/s-box/sb.json >/dev/null 2>&1 && has_hy2=true
+        jq -e '.inbounds[] | select(.tag=="tuic-in")' /etc/s-box/sb.json >/dev/null 2>&1 && has_tuic=true
+        jq -e '.inbounds[] | select(.tag=="anytls-in")' /etc/s-box/sb.json >/dev/null 2>&1 && has_anytls=true
+        
+        local menu_index=1
+        local opt_vless=0
+        local opt_vmess=0
+        local opt_trojan=0
+        local opt_hy2=0
+        local opt_tuic=0
+        local opt_anytls=0
+        
+        if $has_vless; then
+            echo "${menu_index}. 修改 VLESS-Reality 节点参数"
+            opt_vless=$menu_index
+            ((menu_index++))
+        fi
+        if $has_vmess; then
+            echo "${menu_index}. 修改 VMess-WS 节点参数"
+            opt_vmess=$menu_index
+            ((menu_index++))
+        fi
+        if $has_trojan; then
+            echo "${menu_index}. 修改 Trojan-WS-TLS 节点参数"
+            opt_trojan=$menu_index
+            ((menu_index++))
+        fi
+        if $has_hy2; then
+            echo "${menu_index}. 修改 Hysteria2 节点参数"
+            opt_hy2=$menu_index
+            ((menu_index++))
+        fi
+        if $has_tuic; then
+            echo "${menu_index}. 修改 TUIC v5 节点参数"
+            opt_tuic=$menu_index
+            ((menu_index++))
+        fi
+        if $has_anytls; then
+            echo "${menu_index}. 修改 AnyTLS 节点参数"
+            opt_anytls=$menu_index
+            ((menu_index++))
+        fi
+        echo "0. 返回主菜单"
+        echo "=================================================="
+        read -p "请输入要修改的节点选项 [0-$((menu_index-1))]: " modify_choice
+        
+        if [[ "$modify_choice" == "0" || -z "$modify_choice" ]]; then
+            break
+        fi
+        
+        if [[ "$modify_choice" == "$opt_vless" && $opt_vless -ne 0 ]]; then
+            modify_vless
+        elif [[ "$modify_choice" == "$opt_vmess" && $opt_vmess -ne 0 ]]; then
+            modify_vmess
+        elif [[ "$modify_choice" == "$opt_trojan" && $opt_trojan -ne 0 ]]; then
+            modify_trojan
+        elif [[ "$modify_choice" == "$opt_hy2" && $opt_hy2 -ne 0 ]]; then
+            modify_hy2
+        elif [[ "$modify_choice" == "$opt_tuic" && $opt_tuic -ne 0 ]]; then
+            modify_tuic
+        elif [[ "$modify_choice" == "$opt_anytls" && $opt_anytls -ne 0 ]]; then
+            modify_anytls
+        else
+            echo "无效的选项，请重新输入。"
+        fi
+    done
+}
 
 while true; do
     echo "=================================================="
@@ -723,11 +1539,12 @@ while true; do
     echo "2. 重启 Sing-box 和 Argo 隧道服务"
     echo "3. 停止 Sing-box 和 Argo 隧道服务"
     echo "4. 查看 Argo 隧道实时域名与连接状态"
-    echo "5. 彻底卸载脚本环境"
+    echo "5. 修改已搭建节点参数"
+    echo "6. 彻底卸载脚本环境"
     echo "0. 退出"
     echo "=================================================="
-    read -p "请输入选项 [0-5]: " menu_choice
-    case \$menu_choice in
+    read -p "请输入选项 [0-6]: " menu_choice
+    case $menu_choice in
         1)
             if [[ -f /etc/s-box/info.log ]]; then
                 cat /etc/s-box/info.log
@@ -757,6 +1574,9 @@ while true; do
             fi
             ;;
         5)
+            modify_node_params
+            ;;
+        6)
             if [[ -f /etc/s-box/uninstall.sh ]]; then
                 bash /etc/s-box/uninstall.sh
                 exit 0
