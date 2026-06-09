@@ -1188,15 +1188,32 @@ is_enabled() {
 }
 
 # 1. 系统检测与包管理器识别
-if [[ -f /etc/redhat-release ]]; then
-    release="CentOS"
-elif grep -q -i "debian" /etc/issue || grep -q -i "debian" /proc/version; then
-    release="Debian"
-elif grep -q -i "ubuntu" /etc/issue || grep -q -i "ubuntu" /proc/version; then
-    release="Ubuntu"
+if [[ -f /etc/os-release ]]; then
+    . /etc/os-release
+    if [[ "$ID" == "ubuntu" ]]; then
+        release="Ubuntu"
+    elif [[ "$ID" == "debian" ]]; then
+        release="Debian"
+    elif [[ "$ID" == "centos" || "$ID" == "rhel" || "$ID" == "rocky" || "$ID" == "almalinux" ]]; then
+        release="CentOS"
+    elif [[ "$ID" == "alpine" ]]; then
+        log_err "检测到当前系统为 Alpine Linux，暂不支持此发行版。请使用 Ubuntu, Debian 或 CentOS。"
+        exit 1
+    else
+        log_err "暂不支持的系统类型: $NAME。请使用 Ubuntu, Debian 或 CentOS。"
+        exit 1
+    fi
 else
-    log_err "暂不支持的系统类型。请使用 Ubuntu, Debian 或 CentOS。"
-    exit 1
+    if [[ -f /etc/redhat-release ]]; then
+        release="CentOS"
+    elif grep -q -i "debian" /etc/issue; then
+        release="Debian"
+    elif grep -q -i "ubuntu" /etc/issue; then
+        release="Ubuntu"
+    else
+        log_err "暂不支持的系统类型。请使用 Ubuntu, Debian 或 CentOS。"
+        exit 1
+    fi
 fi
 
 # 架构检测
