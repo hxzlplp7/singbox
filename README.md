@@ -34,27 +34,11 @@
 
 ## 📥 安装与运行
 
-在你的 Linux 服务器（支持 Ubuntu, Debian, CentOS）上，使用 root 权限根据需要选择以下一键部署方案：
-
-### 🔹 方案一：标准全直连一键部署脚本（原版）
-适合希望 Sing-box 独立负责入站与出站，直接使用服务器网络访问外部的用户。
+在你的 Linux 服务器（支持 Ubuntu, Debian, CentOS 以及 Alpine Linux）上，使用 root 权限执行以下一键部署命令：
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/hxzlplp7/singbox/main/install.sh)
 ```
-
-### 🔹 方案二：Sing-box 入站对接本地 Mihomo 出站一键部署脚本（出站桥接版）
-适合已在服务器部署了 Mihomo (Clash Meta)，希望使用 Sing-box 负责协议入站，出站流量统一转发到本地 Mihomo（通过 Socks5）进行策略组选择和分流的用户。
-
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/hxzlplp7/singbox/main/install_mihomo_bridge.sh)
-```
-*提示：安装过程中会提示输入本地 Mihomo 监听的 Socks5 端口（默认 `7890`）。*
-
-> 💡 **推荐配合部署**：如果您尚未在服务器上运行 Mihomo 客户端，您可以使用我们提供的 **Mihomo (Clash Meta) 一键部署脚本**。它支持全自动安装最新内核、下载并解析 Clash 订阅、自定义控制端口和控制密钥，并自动部署本地网页版 **yacd** 可视化面板：
-> ```bash
-> bash <(curl -Ls https://raw.githubusercontent.com/hxzlplp7/singbox/main/deploy_mihomo.sh)
-> ```
 
 
 ### 节点选择交互
@@ -91,7 +75,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/hxzlplp7/singbox/main/install_
 
 ## 📋 快捷管理工具 sb
 
-安装成功后，系统会默认生成一个 `/usr/local/bin/sb` 快捷管理脚本。在终端的任何路径下，你可以直接输入：
+安装成功后，系统会默认生成一个快捷管理脚本。在终端的任何路径下，你可以直接输入：
 
 ```bash
 sb
@@ -102,7 +86,8 @@ sb
 2. **重启 Sing-box 和 Argo 隧道服务**：一键重启后台进程。
 3. **停止 Sing-box 和 Argo 隧道服务**：关闭当前运行的后台网络协议。
 4. **查看 Argo 隧道实时域名与连接状态**：直接展示并追踪 cloudflared 临时域名的输出与日志。
-5. **彻底卸载脚本环境**：自动执行卸载逻辑并完全清理残留。
+5. **修改已搭建节点参数**：允许手动修改已安装协议的监听端口、UUID 等设置。
+6. **彻底卸载脚本环境**：自动执行卸载逻辑并完全清理残留。
 0. **退出**。
 
 ---
@@ -114,4 +99,4 @@ sb
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/hxzlplp7/singbox/main/uninstall.sh)
 ```
-脚本将彻底清理 `/etc/s-box` 目录、卸载 `cloudflared` 隧道客户端、删除 Nginx 对应的反代配置、移除 `sb` 快捷命令，并恢复系统守护进程配置。
+脚本将彻底清理 `/etc/s-box` 目录、卸载 `cloudflared` 隧道客户端、删除 Nginx 对应的反代配置、移除 `sb` 快捷命令，恢复系统守护进程配置（支持 Systemd 与 OpenRC 服务自动清理）。

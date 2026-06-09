@@ -1147,10 +1147,9 @@ if [[ -f /etc/os-release ]]; then
     elif [[ "$ID" == "centos" || "$ID" == "rhel" || "$ID" == "rocky" || "$ID" == "almalinux" ]]; then
         release="CentOS"
     elif [[ "$ID" == "alpine" ]]; then
-        log_err "检测到当前系统为 Alpine Linux，暂不支持此发行版。请使用 Ubuntu, Debian 或 CentOS。"
-        exit 1
+        release="Alpine"
     else
-        log_err "暂不支持的系统类型: $NAME。请使用 Ubuntu, Debian 或 CentOS。"
+        log_err "暂不支持的系统类型: $NAME。请使用 Ubuntu, Debian, CentOS 或 Alpine。"
         exit 1
     fi
 else
@@ -1160,8 +1159,10 @@ else
         release="Debian"
     elif grep -q -i "ubuntu" /etc/issue; then
         release="Ubuntu"
+    elif grep -q -i "alpine" /etc/issue; then
+        release="Alpine"
     else
-        log_err "暂不支持的系统类型。请使用 Ubuntu, Debian 或 CentOS。"
+        log_err "暂不支持的系统类型。请使用 Ubuntu, Debian, CentOS 或 Alpine。"
         exit 1
     fi
 fi

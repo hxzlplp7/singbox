@@ -57,27 +57,16 @@ log_info "正在开始卸载 Sing-box 多协议环境..."
 # 1. 停止并禁用相关服务
 log_info "正在停止系统服务..."
 service_stop sing-box
-service_stop mihomo
-service_stop clash
 service_stop argo-tunnel
 service_disable sing-box
-service_disable mihomo
-service_disable clash
 service_disable argo-tunnel
-
-if [[ -f /root/clash-for-linux-install/uninstall.sh ]]; then
-    log_info "正在卸载 Mihomo (clashctl)..."
-    bash /root/clash-for-linux-install/uninstall.sh >/dev/null 2>&1
-fi
 
 # 2. 清理服务定义文件
 log_info "正在清理服务定义文件..."
 if $IS_OPENRC; then
-    rm -f /etc/init.d/sing-box /etc/init.d/argo-tunnel /etc/init.d/mihomo /etc/init.d/clash
+    rm -f /etc/init.d/sing-box /etc/init.d/argo-tunnel
 else
     rm -f /etc/systemd/system/sing-box.service
-    rm -f /etc/systemd/system/mihomo.service
-    rm -f /etc/systemd/system/clash.service
     rm -f /etc/systemd/system/argo-tunnel.service
     systemctl daemon-reload
 fi
@@ -90,11 +79,7 @@ service_restart nginx
 # 4. 删除二进制文件和数据目录
 log_info "正在删除安装目录及二进制程序..."
 rm -rf /etc/s-box
-rm -rf /etc/mihomo
 rm -f /usr/local/bin/cloudflared
 rm -f /usr/local/bin/sb
-rm -f /usr/local/bin/mihomo
-rm -rf /root/clashctl
-rm -rf /root/clash-for-linux-install
 
 log_info "卸载完成！"
