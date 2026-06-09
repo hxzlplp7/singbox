@@ -40,7 +40,7 @@ show_logo
 create_sb_tool() {
 cat > /usr/local/bin/sb <<'EOF'
 #!/bin/bash
-# Sing-box & Mihomo 双核心极简管理控制台
+# Sing-box & Mihomo 双核心极简 management 控制台
 
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}错误：必须以 root 权限运行此脚本！${PLAIN}"
@@ -53,6 +53,12 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;36m'
 PLAIN='\033[0m'
+
+# 自动识别 Mihomo/Clash 服务名称
+SERVICE_NAME="mihomo"
+if systemctl list-unit-files | grep -q "clash.service"; then
+    SERVICE_NAME="clash"
+fi
 
 # 重新生成 Nginx 配置
 regenerate_nginx_conf() {
@@ -95,13 +101,16 @@ regenerate_nginx_conf() {
     }"
     fi
     
+    local yacd_dir="/root/clashctl/ui"
+    [[ ! -d "$yacd_dir" ]] && yacd_dir="/etc/mihomo/yacd"
+
     cat > /etc/nginx/conf.d/singbox-argo.conf <<EOF2
 server {
     listen 127.0.0.1:${port_nginx};
     server_name localhost;
 
     location / {
-        root /etc/mihomo/yacd;
+        root ${yacd_dir};
         index index.html;
     }
 
@@ -315,7 +324,7 @@ EOF2
     if [[ -f /etc/s-box/argo.log ]]; then
         argo_domain=$(cat /etc/s-box/argo.log)
     fi
-    local yacd_secret=$(grep -E "^secret:" /etc/mihomo/config.yaml 2>/dev/null | head -n 1 | awk '{print $2}' | tr -d "'\" ")
+    local yacd_secret=$(grep -E "^secret:" /root/clashctl/config.yaml 2>/dev/null | head -n 1 | awk '{print $2}' | tr -d "'\" ")
 
     echo "------------------【出站桥接】--------------------" >> /etc/s-box/info.log
     echo "本地出站 Mihomo (Socks5) 端口: ${mihomo_port}" >> /etc/s-box/info.log
@@ -849,9 +858,9 @@ modify_mihomo_port() {
         jq --argjson port "$new_m_port" '(.outbounds[] | select(.tag=="mihomo-out") | .server_port) = $port' /etc/s-box/sb.json > "$temp_json" && mv "$temp_json" /etc/s-box/sb.json
         
         # 2. 修改 Mihomo 端的配置监听
-        if [[ -f /etc/mihomo/config.yaml ]]; then
-            sed -i "/^mixed-port:/c\mixed-port: ${new_m_port}" /etc/mihomo/config.yaml
-            systemctl restart mihomo
+        if [[ -f /root/clashctl/config.yaml ]]; then
+            sed -i "/^mixed-port:/c\mixed-port: ${new_m_port}" /root/clashctl/config.yaml
+            systemctl restart $SERVICE_NAME
         fi
         
         # 3. 同步更新 update_sub.sh 中的常量，以防未来更新覆盖
@@ -867,12 +876,12 @@ modify_mihomo_port() {
 }
 
 modify_yacd_params() {
-    if [[ ! -f /etc/mihomo/config.yaml ]]; then
-        echo "错误：未找到配置文件 /etc/mihomo/config.yaml"
+    if [[ ! -f /root/clashctl/config.yaml ]]; then
+        echo "错误：未找到配置文件 /root/clashctl/config.yaml"
         return
     fi
     
-    local cur_secret=$(grep -E "^secret:" /etc/mihomo/config.yaml | head -n 1 | awk '{print $2}' | tr -d "'\" ")
+    local cur_secret=$(grep -E "^secret:" /root/clashctl/config.yaml | head -n 1 | awk '{print $2}' | tr -d "'\" ")
 
     echo "--------------------------------------------------"
     echo "          yacd 面板连接密码修改"
@@ -880,11 +889,11 @@ modify_yacd_params() {
     echo "当前连接密码: $cur_secret"
     read -p "请输入新密钥/密码 (留空不修改): " new_secret
     if [[ -n "$new_secret" ]]; then
-        sed -i "/^secret:/c\secret: \"${new_secret}\"" /etc/mihomo/config.yaml
+        sed -i "/^secret:/c\secret: \"${new_secret}\"" /root/clashctl/config.yaml
         if [[ -f /etc/mihomo/update_sub.sh ]]; then
             sed -i "s/MIHOMO_SECRET=.*/MIHOMO_SECRET=\"${new_secret}\"/g" /etc/mihomo/update_sub.sh
         fi
-        systemctl restart mihomo
+        systemctl restart $SERVICE_NAME
         echo "yacd 连接密码修改成功，新密码: $new_secret"
         regenerate_info_log
     else
@@ -1036,7 +1045,7 @@ while true; do
         2)
             echo "正在重启服务..."
             systemctl restart sing-box 2>/dev/null
-            systemctl restart mihomo 2>/dev/null
+            systemctl restart $SERVICE_NAME 2>/dev/null
             if [[ -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
                 systemctl restart argo-tunnel 2>/dev/null
                 update_argo_domain
@@ -1047,7 +1056,7 @@ while true; do
         3)
             echo "正在停止服务..."
             systemctl stop sing-box 2>/dev/null
-            systemctl stop mihomo 2>/dev/null
+            systemctl stop $SERVICE_NAME 2>/dev/null
             systemctl stop argo-tunnel 2>/dev/null
             echo "服务已全部下线！"
             ;;
@@ -1072,11 +1081,14 @@ while true; do
                 exit 0
             else
                 echo "未找到卸载脚本，执行直接清理..."
-                systemctl stop sing-box mihomo argo-tunnel 2>/dev/null
-                systemctl disable sing-box mihomo argo-tunnel 2>/dev/null
-                rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/mihomo.service /etc/systemd/system/argo-tunnel.service
+                systemctl stop sing-box mihomo clash argo-tunnel 2>/dev/null
+                systemctl disable sing-box mihomo clash argo-tunnel 2>/dev/null
+                if [[ -f /root/clash-for-linux-install/uninstall.sh ]]; then
+                    bash /root/clash-for-linux-install/uninstall.sh >/dev/null 2>&1
+                fi
+                rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/mihomo.service /etc/systemd/system/clash.service /etc/systemd/system/argo-tunnel.service
                 systemctl daemon-reload
-                rm -rf /etc/s-box /etc/mihomo /usr/local/bin/cloudflared /usr/local/bin/sb /usr/local/bin/mihomo
+                rm -rf /etc/s-box /etc/mihomo /usr/local/bin/cloudflared /usr/local/bin/sb /usr/local/bin/mihomo /root/clashctl /root/clash-for-linux-install
                 systemctl restart nginx 2>/dev/null
                 echo "卸载清理完毕！"
                 exit 0
@@ -1250,70 +1262,72 @@ else
     exit 1
 fi
 
-# 5. 下载并安装 Mihomo 内核
-log_info "正在获取 Mihomo 最新版本号..."
-latest_version_mh=$(curl -Ls https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name')
-[[ -z "$latest_version_mh" || "$latest_version_mh" == "null" ]] && latest_version_mh="v1.18.9"
-
-log_info "正在下载 Mihomo 内核 ${latest_version_mh} ($mihomo_cpu)..."
-download_url_mh="https://github.com/MetaCubeX/mihomo/releases/download/${latest_version_mh}/mihomo-linux-${mihomo_cpu}-${latest_version_mh}.gz"
-
-wget -qO /etc/mihomo/mihomo.gz "$download_url_mh"
-if [[ -f "/etc/mihomo/mihomo.gz" ]]; then
-    gzip -d -f /etc/mihomo/mihomo.gz
-    mv /etc/mihomo/mihomo /usr/local/bin/mihomo
-    chmod +x /usr/local/bin/mihomo
-    log_info "Mihomo 内核安装成功：$(/usr/local/bin/mihomo -v)"
-else
-    log_err "下载 Mihomo 失败，使用本地环境已存核心（若有），或请重新运行脚本。"
+# 5. 克隆并使用 clash-for-linux-install 部署 Mihomo 客户端
+log_info "正在自动部署 Mihomo 服务..."
+rm -rf /root/clash-for-linux-install
+git clone --branch master --depth 1 https://gh-proxy.org/https://github.com/nelvko/clash-for-linux-install.git /root/clash-for-linux-install
+if [[ ! -d /root/clash-for-linux-install ]]; then
+    log_warn "首选 GitHub 代理克隆失败，尝试备用代理..."
+    git clone --branch master --depth 1 https://mirror.ghproxy.com/https://github.com/nelvko/clash-for-linux-install.git /root/clash-for-linux-install
 fi
 
-# 6. 下载并安装本地 yacd 控制面板
-log_info "正在部署本地版 yacd 控制面板..."
-wget -qO /etc/mihomo/yacd.zip https://github.com/MetaCubeX/Yacd-meta/archive/refs/heads/gh-pages.zip
-if [[ -f "/etc/mihomo/yacd.zip" ]]; then
-    unzip -qo /etc/mihomo/yacd.zip -d /etc/mihomo/
-    rm -rf /etc/mihomo/yacd
-    mv /etc/mihomo/Yacd-meta-gh-pages /etc/mihomo/yacd
-    rm -f /etc/mihomo/yacd.zip
-    log_info "本地 yacd 控制面板解压完成。"
+if [[ -d /root/clash-for-linux-install ]]; then
+    cd /root/clash-for-linux-install
+    # 执行其安装流程（非交互式，指定使用 mihomo 内核，并传入初始订阅）
+    bash install.sh mihomo "$SUB_URL"
+    log_info "Mihomo 客户端通过 clash-for-linux-install 安装完毕！"
 else
-    log_warn "拉取 yacd 失败，稍后请通过在线面板 https://yacd.metacubex.one 远程管理。"
+    log_err "克隆 clash-for-linux-install 失败，请检查网络！"
+    exit 1
 fi
 
-# 7. 下载并转换 Mihomo 节点订阅
-log_info "正在拉取 Clash 订阅配置..."
-curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash_meta" -o /etc/mihomo/config.yaml "$SUB_URL"
-if [[ -f "/etc/mihomo/config.yaml" && -s "/etc/mihomo/config.yaml" ]]; then
-    # Base64 自动解密
-    if ! grep -q "proxies:" /etc/mihomo/config.yaml && ! grep -q "port:" /etc/mihomo/config.yaml; then
-        if base64 -d /etc/mihomo/config.yaml > /etc/mihomo/config_decoded.yaml 2>/dev/null; then
-            mv /etc/mihomo/config_decoded.yaml /etc/mihomo/config.yaml
-            log_info "Clash 订阅 Base64 格式解码成功！"
-        fi
-    fi
-    # 清除原有的冲突配置
-    sed -i '/^port:/d' /etc/mihomo/config.yaml
-    sed -i '/^socks-port:/d' /etc/mihomo/config.yaml
-    sed -i '/^mixed-port:/d' /etc/mihomo/config.yaml
-    sed -i '/^external-controller:/d' /etc/mihomo/config.yaml
-    sed -i '/^external-ui:/d' /etc/mihomo/config.yaml
-    sed -i '/^secret:/d' /etc/mihomo/config.yaml
+# 检查服务名称
+SERVICE_NAME="mihomo"
+if systemctl list-unit-files | grep -q "clash.service"; then
+    SERVICE_NAME="clash"
+fi
 
-    # 注入覆盖属性
-    cat <<EOF >> /etc/mihomo/config.yaml
+# 6. 配置并融合 Mihomo 订阅
+if [[ -f "/root/clashctl/config.yaml" ]]; then
+    # 移除原冲突项
+    sed -i '/^port:/d' /root/clashctl/config.yaml
+    sed -i '/^socks-port:/d' /root/clashctl/config.yaml
+    sed -i '/^mixed-port:/d' /root/clashctl/config.yaml
+    sed -i '/^external-controller:/d' /root/clashctl/config.yaml
+    sed -i '/^external-ui:/d' /root/clashctl/config.yaml
+    sed -i '/^secret:/d' /root/clashctl/config.yaml
+    
+    # 注入出站重定向及控制
+    cat <<EOF >> /root/clashctl/config.yaml
 
 # --- 自定义出站重定向配置 (Sing-box 桥接) ---
 mixed-port: ${MIHOMO_PORT}
 external-controller: '127.0.0.1:9090'
 secret: "${MIHOMO_SECRET}"
-external-ui: yacd
+external-ui: /root/clashctl/ui
 # --- 自定义配置结束 ---
 EOF
-    log_info "Mihomo 订阅解析重写完成。"
+    systemctl restart $SERVICE_NAME
+    log_info "Mihomo 订阅端口及安全连接密码注入成功！"
 else
-    log_err "拉取订阅失败，请确保您输入的链接在服务器上直接可用。"
+    log_err "部署后未发现配置文件 /root/clashctl/config.yaml"
     exit 1
+fi
+
+# 7. 检测并容错部署 yacd 网页控制面板
+log_info "正在配置 Web 面板静态目录..."
+YACD_DIR="/root/clashctl/ui"
+if [[ ! -d "$YACD_DIR" ]]; then
+    log_warn "未找到 clash-for-linux-install 的面板目录，尝试独立下载 Meta-yacd..."
+    mkdir -p /etc/mihomo
+    wget -qO /etc/mihomo/yacd.zip https://github.com/MetaCubeX/Yacd-meta/archive/refs/heads/gh-pages.zip
+    if [[ -f "/etc/mihomo/yacd.zip" ]]; then
+        unzip -qo /etc/mihomo/yacd.zip -d /etc/mihomo/
+        rm -rf /etc/mihomo/yacd
+        mv /etc/mihomo/Yacd-meta-gh-pages /etc/mihomo/yacd
+        rm -f /etc/mihomo/yacd.zip
+        YACD_DIR="/etc/mihomo/yacd"
+    fi
 fi
 
 # 8. 下载并安装 Argo 隧道
@@ -1711,7 +1725,7 @@ server {
     server_name localhost;
 
     location / {
-        root /etc/mihomo/yacd;
+        root ${YACD_DIR};
         index index.html;
     }
 
@@ -1750,27 +1764,10 @@ LimitNOFILE=infinity
 WantedBy=multi-user.target
 EOF
 
-# Mihomo 服务
-cat > /etc/systemd/system/mihomo.service <<EOF
-[Unit]
-Description=Mihomo Daemon, Clash Meta Core.
-After=network.target
-
-[Service]
-Type=simple
-User=root
-ExecStart=/usr/local/bin/mihomo -d /etc/mihomo
-Restart=always
-RestartSec=10
-LimitNOFILE=infinity
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+# 使能并重启服务
 systemctl daemon-reload
-systemctl enable sing-box mihomo
-systemctl restart sing-box mihomo
+systemctl enable sing-box $SERVICE_NAME
+systemctl restart sing-box $SERVICE_NAME
 
 # Argo 隧道服务
 run_argo_setup=true
@@ -1828,6 +1825,7 @@ fi
 
 # 14. 编写定时更新订阅脚本及 Cron 任务
 log_info "正在配置订阅定时更新任务..."
+mkdir -p /etc/mihomo
 cat > /etc/mihomo/update_sub.sh <<EOF
 #!/bin/bash
 # 自动拉取更新订阅脚本
@@ -1837,33 +1835,33 @@ export LANG=en_US.UTF-8
 MIHOMO_PORT=${MIHOMO_PORT}
 MIHOMO_SECRET="${MIHOMO_SECRET}"
 
-curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash_meta" -o /etc/mihomo/config.yaml.tmp "${SUB_URL}"
-if [[ -f /etc/mihomo/config.yaml.tmp && -s /etc/mihomo/config.yaml.tmp ]]; then
+curl -L -k --connect-timeout 10 --max-time 30 -H "User-Agent: clash_meta" -o /root/clashctl/config.yaml.tmp "${SUB_URL}"
+if [[ -f /root/clashctl/config.yaml.tmp && -s /root/clashctl/config.yaml.tmp ]]; then
     # Base64 解密
-    if ! grep -q "proxies:" /etc/mihomo/config.yaml.tmp && ! grep -q "port:" /etc/mihomo/config.yaml.tmp; then
-        base64 -d /etc/mihomo/config.yaml.tmp > /etc/mihomo/config_decoded.yaml.tmp 2>/dev/null
-        if [[ -f /etc/mihomo/config_decoded.yaml.tmp && -s /etc/mihomo/config_decoded.yaml.tmp ]]; then
-            mv /etc/mihomo/config_decoded.yaml.tmp /etc/mihomo/config.yaml.tmp
+    if ! grep -q "proxies:" /root/clashctl/config.yaml.tmp && ! grep -q "port:" /root/clashctl/config.yaml.tmp; then
+        base64 -d /root/clashctl/config.yaml.tmp > /root/clashctl/config_decoded.yaml.tmp 2>/dev/null
+        if [[ -f /root/clashctl/config_decoded.yaml.tmp && -s /root/clashctl/config_decoded.yaml.tmp ]]; then
+            mv /root/clashctl/config_decoded.yaml.tmp /root/clashctl/config.yaml.tmp
         fi
     fi
-    sed -i '/^port:/d' /etc/mihomo/config.yaml.tmp
-    sed -i '/^socks-port:/d' /etc/mihomo/config.yaml.tmp
-    sed -i '/^mixed-port:/d' /etc/mihomo/config.yaml.tmp
-    sed -i '/^external-controller:/d' /etc/mihomo/config.yaml.tmp
-    sed -i '/^external-ui:/d' /etc/mihomo/config.yaml.tmp
-    sed -i '/^secret:/d' /etc/mihomo/config.yaml.tmp
+    sed -i '/^port:/d' /root/clashctl/config.yaml.tmp
+    sed -i '/^socks-port:/d' /root/clashctl/config.yaml.tmp
+    sed -i '/^mixed-port:/d' /root/clashctl/config.yaml.tmp
+    sed -i '/^external-controller:/d' /root/clashctl/config.yaml.tmp
+    sed -i '/^external-ui:/d' /root/clashctl/config.yaml.tmp
+    sed -i '/^secret:/d' /root/clashctl/config.yaml.tmp
     
-    cat <<EOF2 >> /etc/mihomo/config.yaml.tmp
+    cat <<EOF2 >> /root/clashctl/config.yaml.tmp
 
 # --- 自定义出站重定向配置 (Sing-box 桥接) ---
 mixed-port: \${MIHOMO_PORT}
 external-controller: '127.0.0.1:9090'
 secret: "\${MIHOMO_SECRET}"
-external-ui: yacd
+external-ui: /root/clashctl/ui
 # --- 自定义配置结束 ---
 EOF2
-    mv /etc/mihomo/config.yaml.tmp /etc/mihomo/config.yaml
-    systemctl restart mihomo
+    mv /root/clashctl/config.yaml.tmp /root/clashctl/config.yaml
+    systemctl restart ${SERVICE_NAME}
     echo "\$(date): 自动订阅更新成功！" >> /etc/mihomo/update.log
 else
     echo "\$(date): 更新失败，订阅文件下载为空。" >> /etc/mihomo/update.log
@@ -1885,13 +1883,17 @@ if [[ \$EUID -ne 0 ]]; then
    exit 1
 fi
 echo "正在开始彻底卸载双核心代理环境..."
-systemctl stop sing-box mihomo argo-tunnel 2>/dev/null
-systemctl disable sing-box mihomo argo-tunnel 2>/dev/null
-rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/mihomo.service /etc/systemd/system/argo-tunnel.service
+systemctl stop sing-box mihomo clash argo-tunnel 2>/dev/null
+systemctl disable sing-box mihomo clash argo-tunnel 2>/dev/null
+if [[ -f /root/clash-for-linux-install/uninstall.sh ]]; then
+    echo "正在卸载 Mihomo (clashctl)..."
+    bash /root/clash-for-linux-install/uninstall.sh >/dev/null 2>&1
+fi
+rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/mihomo.service /etc/systemd/system/clash.service /etc/systemd/system/argo-tunnel.service
 systemctl daemon-reload
 rm -f /etc/nginx/conf.d/singbox-argo.conf
 systemctl restart nginx 2>/dev/null
-rm -rf /etc/s-box /etc/mihomo /usr/local/bin/cloudflared /usr/local/bin/mihomo /usr/local/bin/sb
+rm -rf /etc/s-box /etc/mihomo /usr/local/bin/cloudflared /usr/local/bin/mihomo /usr/local/bin/sb /root/clashctl /root/clash-for-linux-install
 echo "卸载清理彻底完成！"
 EOF
 chmod +x /etc/s-box/uninstall.sh
