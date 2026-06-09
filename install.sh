@@ -395,7 +395,7 @@ update_argo_domain() {
     local argo_domain=""
     for i in {1..5}; do
         if $IS_OPENRC; then
-            argo_domain=$(tail -n 50 /var/log/argo-tunnel.log 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+            argo_domain=$(cat /var/log/argo-tunnel.log /var/log/argo-tunnel.err 2>/dev/null | tail -n 100 | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
         else
             argo_domain=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
         fi
@@ -1661,7 +1661,7 @@ command_args="run -c /etc/s-box/sb.json"
 command_background="yes"
 pidfile="/run/\${RC_SVCNAME}.pid"
 output_log="/var/log/sing-box.log"
-error_log="/var/log/sing-box.err"
+error_log="/var/log/sing-box.log"
 depend() {
     need net
     after firewall
@@ -1708,7 +1708,7 @@ command_args="tunnel --url http://127.0.0.1:${PORT_NGINX}"
 command_background="yes"
 pidfile="/run/\${RC_SVCNAME}.pid"
 output_log="/var/log/argo-tunnel.log"
-error_log="/var/log/argo-tunnel.err"
+error_log="/var/log/argo-tunnel.log"
 depend() {
     need net sing-box nginx
 }
@@ -1744,7 +1744,7 @@ EOF
     ARGO_DOMAIN=""
     for i in {1..5}; do
         if $IS_OPENRC; then
-            ARGO_DOMAIN=$(tail -n 50 /var/log/argo-tunnel.log 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+            ARGO_DOMAIN=$(cat /var/log/argo-tunnel.log /var/log/argo-tunnel.err 2>/dev/null | tail -n 100 | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
         else
             ARGO_DOMAIN=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
         fi
