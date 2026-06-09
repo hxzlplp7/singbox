@@ -1254,7 +1254,7 @@ esac
 log_info "正在安装必要的系统依赖..."
 if [[ "$release" == "Alpine" ]]; then
     apk update
-    apk add --no-cache bash jq openssl curl tar wget procps coreutils
+    apk add --no-cache bash jq openssl curl tar wget procps coreutils iproute2
     is_enabled "$ENABLE_ARGO" && apk add --no-cache nginx
 elif [[ "$release" == "CentOS" ]]; then
     yum install -y epel-release
@@ -1664,6 +1664,10 @@ if is_enabled "$ENABLE_ARGO"; then
     }"
     fi
 
+    # 删除 Alpine/Debian 默认的 Nginx 站点配置，避免冲突
+    rm -f ${NGINX_CONF_DIR}/default.conf 2>/dev/null
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null
+
     cat > ${NGINX_CONF_DIR}/singbox-argo.conf <<EOF
 server {
     listen 127.0.0.1:${PORT_NGINX};
@@ -1671,8 +1675,21 @@ server {
     ${nginx_locations}
 }
 EOF
+    # 测试 Nginx 配置是否合法
+    if ! nginx -t >/dev/null 2>&1; then
+        log_warn "Nginx 配置测试失败，尝试修复..."
+        nginx -t 2>&1 | tail -n 5
+    fi
     service_enable nginx
     service_restart nginx
+    # 验证 Nginx 是否真正监听了指定端口
+    sleep 1
+    if ss -tlnp 2>/dev/null | grep -q ":${PORT_NGINX} " || netstat -tlnp 2>/dev/null | grep -q ":${PORT_NGINX} "; then
+        log_info "Nginx 已成功启动并监听端口 ${PORT_NGINX}"
+    else
+        log_warn "Nginx 未在端口 ${PORT_NGINX} 上监听，请检查 Nginx 配置！"
+        nginx -t 2>&1
+    fi
 fi
 
 # 10. 创建守护服务
