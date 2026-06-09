@@ -14,30 +14,78 @@ PLAIN='\033[0m'
 log_info() { echo -e "${GREEN}[信息] $1${PLAIN}"; }
 log_err() { echo -e "${RED}[错误] $1${PLAIN}"; }
 
+# 自动检测是否为 OpenRC (Alpine 等)
+IS_OPENRC=false
+if [[ -x "/sbin/openrc-run" || -x "/sbin/runlevels" ]]; then
+    IS_OPENRC=true
+fi
+
+# Nginx 配置目录自适应
+NGINX_CONF_DIR="/etc/nginx/conf.d"
+[[ -d "/etc/nginx/http.d" ]] && NGINX_CONF_DIR="/etc/nginx/http.d"
+
+# 服务控制函数
+service_stop() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" stop >/dev/null 2>&1
+    else
+        systemctl stop "$name" >/dev/null 2>&1
+    fi
+}
+
+service_disable() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-update del "$name" default >/dev/null 2>&1
+    else
+        systemctl disable "$name" >/dev/null 2>&1
+    fi
+}
+
+service_restart() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" restart >/dev/null 2>&1
+    else
+        systemctl restart "$name" >/dev/null 2>&1
+    fi
+}
+
 log_info "正在开始卸载 Sing-box 多协议环境..."
 
 # 1. 停止并禁用相关服务
-log_info "正在停止 systemd 服务..."
-systemctl stop sing-box mihomo clash argo-tunnel 2>/dev/null
-systemctl disable sing-box mihomo clash argo-tunnel 2>/dev/null
+log_info "正在停止系统服务..."
+service_stop sing-box
+service_stop mihomo
+service_stop clash
+service_stop argo-tunnel
+service_disable sing-box
+service_disable mihomo
+service_disable clash
+service_disable argo-tunnel
 
 if [[ -f /root/clash-for-linux-install/uninstall.sh ]]; then
     log_info "正在卸载 Mihomo (clashctl)..."
     bash /root/clash-for-linux-install/uninstall.sh >/dev/null 2>&1
 fi
 
-# 2. 清理 systemd 服务文件
+# 2. 清理服务定义文件
 log_info "正在清理服务定义文件..."
-rm -f /etc/systemd/system/sing-box.service
-rm -f /etc/systemd/system/mihomo.service
-rm -f /etc/systemd/system/clash.service
-rm -f /etc/systemd/system/argo-tunnel.service
-systemctl daemon-reload
+if $IS_OPENRC; then
+    rm -f /etc/init.d/sing-box /etc/init.d/argo-tunnel /etc/init.d/mihomo /etc/init.d/clash
+else
+    rm -f /etc/systemd/system/sing-box.service
+    rm -f /etc/systemd/system/mihomo.service
+    rm -f /etc/systemd/system/clash.service
+    rm -f /etc/systemd/system/argo-tunnel.service
+    systemctl daemon-reload
+fi
 
 # 3. 清理 Nginx 反代配置
 log_info "正在清理 Nginx 配置..."
-rm -f /etc/nginx/conf.d/singbox-argo.conf
-systemctl restart nginx 2>/dev/null
+rm -f ${NGINX_CONF_DIR}/singbox-argo.conf
+service_restart nginx
 
 # 4. 删除二进制文件和数据目录
 log_info "正在删除安装目录及二进制程序..."

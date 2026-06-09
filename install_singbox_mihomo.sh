@@ -20,6 +20,71 @@ log_info() { echo -e "${GREEN}[信息] $1${PLAIN}"; }
 log_warn() { echo -e "${YELLOW}[警告] $1${PLAIN}"; }
 log_err() { echo -e "${RED}[错误] $1${PLAIN}"; }
 
+# 自动检测是否为 OpenRC (Alpine 等)
+IS_OPENRC=false
+if [[ -x "/sbin/openrc-run" || -x "/sbin/runlevels" ]]; then
+    IS_OPENRC=true
+fi
+
+# Nginx 配置目录自适应
+NGINX_CONF_DIR="/etc/nginx/conf.d"
+[[ -d "/etc/nginx/http.d" ]] && NGINX_CONF_DIR="/etc/nginx/http.d"
+
+# 服务控制函数
+service_start() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" start >/dev/null 2>&1
+    else
+        systemctl start "$name" >/dev/null 2>&1
+    fi
+}
+
+service_stop() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" stop >/dev/null 2>&1
+    else
+        systemctl stop "$name" >/dev/null 2>&1
+    fi
+}
+
+service_restart() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" restart >/dev/null 2>&1
+    else
+        systemctl restart "$name" >/dev/null 2>&1
+    fi
+}
+
+service_enable() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-update add "$name" default >/dev/null 2>&1
+    else
+        systemctl enable "$name" >/dev/null 2>&1
+    fi
+}
+
+service_disable() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-update del "$name" default >/dev/null 2>&1
+    else
+        systemctl disable "$name" >/dev/null 2>&1
+    fi
+}
+
+service_is_active() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" status | grep -q "started"
+    else
+        systemctl is-active --quiet "$name"
+    fi
+}
+
 show_logo() {
     echo -e "${BLUE}====================================================================${PLAIN}"
     echo -e "${GREEN}   ____  _             ____                ${YELLOW} __  __ _ _                      ${PLAIN}"
@@ -56,17 +121,19 @@ PLAIN='\033[0m'
 
 # 自动识别 Mihomo/Clash 服务名称
 SERVICE_NAME="mihomo"
-if systemctl list-unit-files | grep -q "clash.service"; then
-    SERVICE_NAME="clash"
+if ! $IS_OPENRC; then
+    if systemctl list-unit-files | grep -q "clash.service"; then
+        SERVICE_NAME="clash"
+    fi
 fi
 
 # 重新生成 Nginx 配置
 regenerate_nginx_conf() {
-    if [[ ! -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
+    if [[ ! -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
         return
     fi
     
-    local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" /etc/nginx/conf.d/singbox-argo.conf | head -n 1 | awk -F: '{print $2}')
+    local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf | head -n 1 | awk -F: '{print $2}')
     [[ -z "$port_nginx" ]] && port_nginx=8401
     
     local nginx_locations=""
@@ -103,17 +170,17 @@ regenerate_nginx_conf() {
     
     local yacd_dir="/root/clashctl/ui"
     [[ ! -d "$yacd_dir" ]] && yacd_dir="/etc/mihomo/yacd"
-
-    cat > /etc/nginx/conf.d/singbox-argo.conf <<EOF2
+ 
+    cat > ${NGINX_CONF_DIR}/singbox-argo.conf <<EOF2
 server {
     listen 127.0.0.1:${port_nginx};
     server_name localhost;
-
+ 
     location / {
         root ${yacd_dir};
         index index.html;
     }
-
+ 
     location ~* ^/(version|configs|proxies|rules|connections|logs|traffic|providers|dns|restart) {
         proxy_redirect off;
         proxy_pass http://127.0.0.1:9090;
@@ -122,11 +189,11 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$http_host;
     }
-
+ 
     ${nginx_locations}
 }
 EOF2
-    systemctl restart nginx >/dev/null 2>&1
+    service_restart nginx
 }
 
 # 重新生成 info.log 分享链接与面板信息
@@ -339,14 +406,18 @@ EOF2
 
 # 重新获取 Argo 临时域名并写入 argo.log
 update_argo_domain() {
-    if [[ ! -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
+    if [[ ! -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
         return
     fi
     echo "正在等待 Argo 隧道上线并获取临时域名..."
     sleep 6
     local argo_domain=""
     for i in {1..5}; do
-        argo_domain=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+        if $IS_OPENRC; then
+            argo_domain=$(tail -n 50 /var/log/argo-tunnel.log 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+        else
+            argo_domain=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+        fi
         [[ -n "$argo_domain" ]] && break
         sleep 2
     done
@@ -360,15 +431,15 @@ update_argo_domain() {
 
 apply_changes() {
     echo "正在应用更改，重启 Sing-box 服务..."
-    systemctl restart sing-box
+    service_restart sing-box
     
-    if [[ -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
+    if [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
         echo "正在重启 Nginx 服务..."
         regenerate_nginx_conf
         # 仅当 argo-tunnel 未运行时才启动/重启它，以保持临时域名不变
-        if ! systemctl is-active --quiet argo-tunnel; then
+        if ! service_is_active argo-tunnel; then
             echo "正在启动 Argo 隧道服务..."
-            systemctl restart argo-tunnel 2>/dev/null
+            service_restart argo-tunnel
             update_argo_domain
         fi
     fi
@@ -1044,10 +1115,10 @@ while true; do
             ;;
         2)
             echo "正在重启服务..."
-            systemctl restart sing-box 2>/dev/null
-            systemctl restart $SERVICE_NAME 2>/dev/null
-            if [[ -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
-                systemctl restart argo-tunnel 2>/dev/null
+            service_restart sing-box
+            service_restart $SERVICE_NAME
+            if [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
+                service_restart argo-tunnel
                 update_argo_domain
             fi
             regenerate_info_log
@@ -1055,16 +1126,20 @@ while true; do
             ;;
         3)
             echo "正在停止服务..."
-            systemctl stop sing-box 2>/dev/null
-            systemctl stop $SERVICE_NAME 2>/dev/null
-            systemctl stop argo-tunnel 2>/dev/null
+            service_stop sing-box
+            service_stop $SERVICE_NAME
+            service_stop argo-tunnel
             echo "服务已全部下线！"
             ;;
         4)
             echo "正在获取隧道状态..."
-            if systemctl is-active --quiet argo-tunnel; then
+            if service_is_active argo-tunnel; then
                 echo "Argo 隧道处于运行状态："
-                journalctl -u argo-tunnel -n 15 --no-pager
+                if $IS_OPENRC; then
+                    tail -n 15 /var/log/argo-tunnel.log 2>/dev/null
+                else
+                    journalctl -u argo-tunnel -n 15 --no-pager
+                fi
             else
                 echo "Argo 隧道服务未运行。"
             fi
@@ -1081,15 +1156,25 @@ while true; do
                 exit 0
             else
                 echo "未找到卸载脚本，执行直接清理..."
-                systemctl stop sing-box mihomo clash argo-tunnel 2>/dev/null
-                systemctl disable sing-box mihomo clash argo-tunnel 2>/dev/null
+                service_stop sing-box
+                service_stop mihomo
+                service_stop clash
+                service_stop argo-tunnel
+                service_disable sing-box
+                service_disable mihomo
+                service_disable clash
+                service_disable argo-tunnel
                 if [[ -f /root/clash-for-linux-install/uninstall.sh ]]; then
                     bash /root/clash-for-linux-install/uninstall.sh >/dev/null 2>&1
                 fi
-                rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/mihomo.service /etc/systemd/system/clash.service /etc/systemd/system/argo-tunnel.service
-                systemctl daemon-reload
+                if $IS_OPENRC; then
+                    rm -f /etc/init.d/sing-box /etc/init.d/argo-tunnel /etc/init.d/mihomo /etc/init.d/clash
+                else
+                    rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/mihomo.service /etc/systemd/system/clash.service /etc/systemd/system/argo-tunnel.service
+                    systemctl daemon-reload
+                fi
                 rm -rf /etc/s-box /etc/mihomo /usr/local/bin/cloudflared /usr/local/bin/sb /usr/local/bin/mihomo /root/clashctl /root/clash-for-linux-install
-                systemctl restart nginx 2>/dev/null
+                service_restart nginx
                 echo "卸载清理完毕！"
                 exit 0
             fi
@@ -1245,6 +1330,12 @@ if [[ "$release" == "CentOS" ]]; then
     yum install -y jq openssl curl tar wget unzip gzip psmisc nginx cronie git xz
     systemctl enable crond >/dev/null 2>&1
     systemctl start crond >/dev/null 2>&1
+elif [[ "$release" == "Alpine" ]]; then
+    log_info "正在通过 apk 安装依赖..."
+    apk update
+    apk add jq openssl curl tar wget unzip gzip psmisc nginx git xz busybox-initscripts
+    rc-update add crond default >/dev/null 2>&1
+    rc-service crond start >/dev/null 2>&1
 else
     log_info "正在通过 apt 安装依赖..."
     apt-get update -y
@@ -1893,7 +1984,11 @@ external-ui: /root/clashctl/ui
 # --- 自定义配置结束 ---
 EOF2
     mv /root/clashctl/config.yaml.tmp /root/clashctl/config.yaml
-    systemctl restart ${SERVICE_NAME}
+    if [[ -x "/sbin/openrc-run" ]]; then
+        rc-service ${SERVICE_NAME} restart >/dev/null 2>&1
+    else
+        systemctl restart ${SERVICE_NAME} >/dev/null 2>&1
+    fi
     echo "\$(date): 自动订阅更新成功！" >> /etc/mihomo/update.log
 else
     echo "\$(date): 更新失败，订阅文件下载为空。" >> /etc/mihomo/update.log
@@ -1915,16 +2010,68 @@ if [[ \$EUID -ne 0 ]]; then
    exit 1
 fi
 echo "正在开始彻底卸载双核心代理环境..."
-systemctl stop sing-box mihomo clash argo-tunnel 2>/dev/null
-systemctl disable sing-box mihomo clash argo-tunnel 2>/dev/null
+
+# 自动检测是否为 OpenRC (Alpine 等)
+IS_OPENRC=false
+if [[ -x "/sbin/openrc-run" || -x "/sbin/runlevels" ]]; then
+    IS_OPENRC=true
+fi
+
+# Nginx 配置目录自适应
+NGINX_CONF_DIR="/etc/nginx/conf.d"
+[[ -d "/etc/nginx/http.d" ]] && NGINX_CONF_DIR="/etc/nginx/http.d"
+
+# 服务控制函数
+service_stop() {
+    local name=\$1
+    if \$IS_OPENRC; then
+        rc-service "\$name" stop >/dev/null 2>&1
+    else
+        systemctl stop "\$name" >/dev/null 2>&1
+    fi
+}
+
+service_disable() {
+    local name=\$1
+    if \$IS_OPENRC; then
+        rc-update del "\$name" default >/dev/null 2>&1
+    else
+        systemctl disable "\$name" >/dev/null 2>&1
+    fi
+}
+
+service_restart() {
+    local name=\$1
+    if \$IS_OPENRC; then
+        rc-service "\$name" restart >/dev/null 2>&1
+    else
+        systemctl restart "\$name" >/dev/null 2>&1
+    fi
+}
+
+service_stop sing-box
+service_stop mihomo
+service_stop clash
+service_stop argo-tunnel
+service_disable sing-box
+service_disable mihomo
+service_disable clash
+service_disable argo-tunnel
+
 if [[ -f /root/clash-for-linux-install/uninstall.sh ]]; then
     echo "正在卸载 Mihomo (clashctl)..."
     bash /root/clash-for-linux-install/uninstall.sh >/dev/null 2>&1
 fi
-rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/mihomo.service /etc/systemd/system/clash.service /etc/systemd/system/argo-tunnel.service
-systemctl daemon-reload
-rm -f /etc/nginx/conf.d/singbox-argo.conf
-systemctl restart nginx 2>/dev/null
+
+if \$IS_OPENRC; then
+    rm -f /etc/init.d/sing-box /etc/init.d/argo-tunnel /etc/init.d/mihomo /etc/init.d/clash
+else
+    rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/mihomo.service /etc/systemd/system/clash.service /etc/systemd/system/argo-tunnel.service
+    systemctl daemon-reload
+fi
+
+rm -f \${NGINX_CONF_DIR}/singbox-argo.conf
+service_restart nginx 2>/dev/null
 rm -rf /etc/s-box /etc/mihomo /usr/local/bin/cloudflared /usr/local/bin/mihomo /usr/local/bin/sb /root/clashctl /root/clash-for-linux-install
 echo "卸载清理彻底完成！"
 EOF

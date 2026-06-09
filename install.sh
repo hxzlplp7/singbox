@@ -20,6 +20,71 @@ log_info() { echo -e "${GREEN}[信息] $1${PLAIN}"; }
 log_warn() { echo -e "${YELLOW}[警告] $1${PLAIN}"; }
 log_err() { echo -e "${RED}[错误] $1${PLAIN}"; }
 
+# 自动检测是否为 OpenRC (Alpine 等)
+IS_OPENRC=false
+if [[ -x "/sbin/openrc-run" || -x "/sbin/runlevels" ]]; then
+    IS_OPENRC=true
+fi
+
+# Nginx 配置目录自适应
+NGINX_CONF_DIR="/etc/nginx/conf.d"
+[[ -d "/etc/nginx/http.d" ]] && NGINX_CONF_DIR="/etc/nginx/http.d"
+
+# 服务控制函数
+service_start() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" start >/dev/null 2>&1
+    else
+        systemctl start "$name" >/dev/null 2>&1
+    fi
+}
+
+service_stop() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" stop >/dev/null 2>&1
+    else
+        systemctl stop "$name" >/dev/null 2>&1
+    fi
+}
+
+service_restart() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" restart >/dev/null 2>&1
+    else
+        systemctl restart "$name" >/dev/null 2>&1
+    fi
+}
+
+service_enable() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-update add "$name" default >/dev/null 2>&1
+    else
+        systemctl enable "$name" >/dev/null 2>&1
+    fi
+}
+
+service_disable() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-update del "$name" default >/dev/null 2>&1
+    else
+        systemctl disable "$name" >/dev/null 2>&1
+    fi
+}
+
+service_is_active() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" status | grep -q "started"
+    else
+        systemctl is-active --quiet "$name"
+    fi
+}
+
 log_info "开始安装 Sing-box 多协议一键部署脚本..."
 
 create_sb_tool() {
@@ -32,13 +97,60 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+# 自动检测是否为 OpenRC (Alpine 等)
+IS_OPENRC=false
+if [[ -x "/sbin/openrc-run" || -x "/sbin/runlevels" ]]; then
+    IS_OPENRC=true
+fi
+
+# Nginx 配置目录自适应
+NGINX_CONF_DIR="/etc/nginx/conf.d"
+[[ -d "/etc/nginx/http.d" ]] && NGINX_CONF_DIR="/etc/nginx/http.d"
+
+# 服务控制函数
+service_start() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" start >/dev/null 2>&1
+    else
+        systemctl start "$name" >/dev/null 2>&1
+    fi
+}
+
+service_stop() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" stop >/dev/null 2>&1
+    else
+        systemctl stop "$name" >/dev/null 2>&1
+    fi
+}
+
+service_restart() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" restart >/dev/null 2>&1
+    else
+        systemctl restart "$name" >/dev/null 2>&1
+    fi
+}
+
+service_is_active() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-service "$name" status | grep -q "started"
+    else
+        systemctl is-active --quiet "$name"
+    fi
+}
+
 # 重新生成 Nginx 配置
 regenerate_nginx_conf() {
-    if [[ ! -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
+    if [[ ! -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
         return
     fi
     
-    local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" /etc/nginx/conf.d/singbox-argo.conf | head -n 1 | awk -F: '{print $2}')
+    local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf | head -n 1 | awk -F: '{print $2}')
     [[ -z "$port_nginx" ]] && port_nginx=8401
     
     local nginx_locations=""
@@ -73,14 +185,14 @@ regenerate_nginx_conf() {
     }"
     fi
     
-    cat > /etc/nginx/conf.d/singbox-argo.conf <<EOF2
+    cat > ${NGINX_CONF_DIR}/singbox-argo.conf <<EOF2
 server {
     listen 127.0.0.1:${port_nginx};
     server_name localhost;
-    ${nginx_locations}
+    \${nginx_locations}
 }
 EOF2
-    systemctl restart nginx >/dev/null 2>&1
+    service_restart nginx
 }
 
 # 重新生成 info.log 分享链接
@@ -275,14 +387,18 @@ EOF2
 
 # 重新获取 Argo 临时域名并写入 argo.log
 update_argo_domain() {
-    if [[ ! -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
+    if [[ ! -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
         return
     fi
     echo "正在等待 Argo 隧道上线并获取临时域名..."
     sleep 6
     local argo_domain=""
     for i in {1..5}; do
-        argo_domain=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+        if $IS_OPENRC; then
+            argo_domain=$(tail -n 50 /var/log/argo-tunnel.log 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+        else
+            argo_domain=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+        fi
         [[ -n "$argo_domain" ]] && break
         sleep 2
     done
@@ -296,12 +412,12 @@ update_argo_domain() {
 
 apply_changes() {
     echo "正在应用更改，重启 Sing-box 服务..."
-    systemctl restart sing-box
+    service_restart sing-box
     
-    if [[ -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
+    if [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
         echo "正在重启 Nginx 和 Argo 服务..."
         regenerate_nginx_conf
-        systemctl restart argo-tunnel 2>/dev/null
+        service_restart argo-tunnel
         update_argo_domain
     fi
     
@@ -893,9 +1009,9 @@ while true; do
             ;;
         2)
             echo "正在重启服务..."
-            systemctl restart sing-box
-            if [[ -f /etc/nginx/conf.d/singbox-argo.conf ]]; then
-                systemctl restart argo-tunnel 2>/dev/null
+            service_restart sing-box
+            if [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
+                service_restart argo-tunnel
                 update_argo_domain
             fi
             regenerate_info_log
@@ -903,15 +1019,19 @@ while true; do
             ;;
         3)
             echo "正在停止服务..."
-            systemctl stop sing-box
-            systemctl stop argo-tunnel 2>/dev/null
+            service_stop sing-box
+            service_stop argo-tunnel
             echo "服务已停止！"
             ;;
         4)
             echo "正在获取隧道状态..."
-            if systemctl is-active --quiet argo-tunnel; then
+            if service_is_active argo-tunnel; then
                 echo "Argo 隧道处于运行状态："
-                journalctl -u argo-tunnel -n 15 --no-pager
+                if $IS_OPENRC; then
+                    tail -n 15 /var/log/argo-tunnel.log 2>/dev/null
+                else
+                    journalctl -u argo-tunnel -n 15 --no-pager
+                fi
             else
                 echo "Argo 隧道服务未运行。"
             fi
@@ -931,12 +1051,18 @@ while true; do
                 exit 0
             else
                 echo "未找到卸载脚本，正在执行直接清理..."
-                systemctl stop sing-box argo-tunnel 2>/dev/null
-                systemctl disable sing-box argo-tunnel 2>/dev/null
-                rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/argo-tunnel.service
-                systemctl daemon-reload
+                service_stop sing-box
+                service_stop argo-tunnel
+                service_disable sing-box
+                service_disable argo-tunnel
+                if $IS_OPENRC; then
+                    rm -f /etc/init.d/sing-box /etc/init.d/argo-tunnel
+                else
+                    rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/argo-tunnel.service
+                    systemctl daemon-reload
+                fi
                 rm -rf /etc/s-box /usr/local/bin/cloudflared /usr/local/bin/sb
-                systemctl restart nginx 2>/dev/null
+                service_restart nginx
                 echo "清理完成！"
                 exit 0
             fi
@@ -1457,21 +1583,44 @@ if is_enabled "$ENABLE_ARGO"; then
     }"
     fi
 
-    cat > /etc/nginx/conf.d/singbox-argo.conf <<EOF
+    cat > ${NGINX_CONF_DIR}/singbox-argo.conf <<EOF
 server {
     listen 127.0.0.1:${PORT_NGINX};
     server_name localhost;
     ${nginx_locations}
 }
 EOF
-    systemctl restart nginx
+    service_restart nginx
 fi
 
-# 10. 创建 systemd 服务
-log_info "正在创建 systemd 服务..."
-
-# Sing-box 服务
-cat > /etc/systemd/system/sing-box.service <<EOF
+# 10. 创建守护服务
+if $IS_OPENRC; then
+    log_info "正在创建 OpenRC 服务..."
+    
+    # Sing-box OpenRC 服务
+    cat > /etc/init.d/sing-box <<EOF
+#!/sbin/openrc-run
+name="sing-box"
+description="Sing-box Service"
+command="/etc/s-box/sing-box"
+command_args="run -c /etc/s-box/sb.json"
+command_background="yes"
+pidfile="/run/\${RC_SVCNAME}.pid"
+output_log="/var/log/sing-box.log"
+error_log="/var/log/sing-box.err"
+depend() {
+    need net
+    after firewall
+}
+EOF
+    chmod +x /etc/init.d/sing-box
+    service_enable sing-box
+    service_restart sing-box
+else
+    log_info "正在创建 systemd 服务..."
+    
+    # Sing-box 服务
+    cat > /etc/systemd/system/sing-box.service <<EOF
 [Unit]
 Description=Sing-box Service
 After=network.target nss-lookup.target
@@ -1488,13 +1637,33 @@ LimitNOFILE=infinity
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable sing-box
-systemctl restart sing-box
+    systemctl daemon-reload
+    systemctl enable sing-box
+    systemctl restart sing-box
+fi
 
 # Argo 隧道服务（仅在启用 Argo 时）
 if is_enabled "$ENABLE_ARGO"; then
-    cat > /etc/systemd/system/argo-tunnel.service <<EOF
+    if $IS_OPENRC; then
+        cat > /etc/init.d/argo-tunnel <<EOF
+#!/sbin/openrc-run
+name="argo-tunnel"
+description="Argo Tunnel Service"
+command="/usr/local/bin/cloudflared"
+command_args="tunnel --url http://127.0.0.1:${PORT_NGINX}"
+command_background="yes"
+pidfile="/run/\${RC_SVCNAME}.pid"
+output_log="/var/log/argo-tunnel.log"
+error_log="/var/log/argo-tunnel.err"
+depend() {
+    need net sing-box nginx
+}
+EOF
+        chmod +x /etc/init.d/argo-tunnel
+        service_enable argo-tunnel
+        service_restart argo-tunnel
+    else
+        cat > /etc/systemd/system/argo-tunnel.service <<EOF
 [Unit]
 Description=Argo Tunnel Service
 After=network.target
@@ -1509,9 +1678,10 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable argo-tunnel
-    systemctl restart argo-tunnel
+        systemctl daemon-reload
+        systemctl enable argo-tunnel
+        systemctl restart argo-tunnel
+    fi
 
     log_info "正在等待 Argo 隧道上线，获取节点临时域名..."
     sleep 6
@@ -1519,7 +1689,11 @@ EOF
     # 提取 trycloudflare 域名
     ARGO_DOMAIN=""
     for i in {1..5}; do
-        ARGO_DOMAIN=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+        if $IS_OPENRC; then
+            ARGO_DOMAIN=$(tail -n 50 /var/log/argo-tunnel.log 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+        else
+            ARGO_DOMAIN=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+        fi
         if [[ -n "$ARGO_DOMAIN" ]]; then
             break
         fi
@@ -1527,7 +1701,11 @@ EOF
     done
 
     if [[ -z "$ARGO_DOMAIN" ]]; then
-        log_warn "获取 Argo 域名超时，请稍后使用 'journalctl -u argo-tunnel' 命令手动查看。"
+        if $IS_OPENRC; then
+            log_warn "获取 Argo 域名超时，请稍后查看 /var/log/argo-tunnel.log。"
+        else
+            log_warn "获取 Argo 域名超时，请稍后使用 'journalctl -u argo-tunnel' 命令手动查看。"
+        fi
         ARGO_DOMAIN="[未获取到Argo域名]"
     fi
     echo "$ARGO_DOMAIN" > /etc/s-box/argo.log
