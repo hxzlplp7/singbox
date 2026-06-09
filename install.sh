@@ -144,6 +144,24 @@ service_is_active() {
     fi
 }
 
+service_enable() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-update add "$name" default >/dev/null 2>&1
+    else
+        systemctl enable "$name" >/dev/null 2>&1
+    fi
+}
+
+service_disable() {
+    local name=$1
+    if $IS_OPENRC; then
+        rc-update del "$name" default >/dev/null 2>&1
+    else
+        systemctl disable "$name" >/dev/null 2>&1
+    fi
+}
+
 # 重新生成 Nginx 配置
 regenerate_nginx_conf() {
     if [[ ! -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
@@ -1234,7 +1252,11 @@ esac
 
 # 2. 安装系统依赖和 Nginx
 log_info "正在安装必要的系统依赖..."
-if [[ "$release" == "CentOS" ]]; then
+if [[ "$release" == "Alpine" ]]; then
+    apk update
+    apk add --no-cache bash jq openssl curl tar wget procps coreutils
+    is_enabled "$ENABLE_ARGO" && apk add --no-cache nginx
+elif [[ "$release" == "CentOS" ]]; then
     yum install -y epel-release
     yum install -y jq openssl curl tar wget psmisc
     is_enabled "$ENABLE_ARGO" && yum install -y nginx
@@ -1243,6 +1265,11 @@ else
     apt-get install -y jq openssl curl tar wget psmisc
     is_enabled "$ENABLE_ARGO" && apt-get install -y nginx
 fi
+
+# 安装完依赖后重新检测 Nginx 配置目录（Alpine 安装 nginx 后目录才出现）
+NGINX_CONF_DIR="/etc/nginx/conf.d"
+[[ -d "/etc/nginx/http.d" ]] && NGINX_CONF_DIR="/etc/nginx/http.d"
+mkdir -p "${NGINX_CONF_DIR}"
 
 # 3. 创建配置文件目录
 mkdir -p /etc/s-box
@@ -1644,6 +1671,7 @@ server {
     ${nginx_locations}
 }
 EOF
+    service_enable nginx
     service_restart nginx
 fi
 
@@ -1916,8 +1944,11 @@ create_sb_tool
 # 备份一份 uninstall.sh 在 /etc/s-box 中以便 sb 工具直接调用
 if [[ -f ./uninstall.sh ]]; then
     cp ./uninstall.sh /etc/s-box/uninstall.sh
-    chmod +x /etc/s-box/uninstall.sh
+else
+    curl -sL https://raw.githubusercontent.com/hxzlplp7/singbox/main/uninstall.sh -o /etc/s-box/uninstall.sh 2>/dev/null \
+        || wget -qO /etc/s-box/uninstall.sh https://raw.githubusercontent.com/hxzlplp7/singbox/main/uninstall.sh 2>/dev/null
 fi
+chmod +x /etc/s-box/uninstall.sh 2>/dev/null
 
 # 打印信息到终端
 cat /etc/s-box/info.log
