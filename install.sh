@@ -986,6 +986,55 @@ modify_node_params() {
     done
 }
 
+view_logs() {
+    while true; do
+        echo -e "\033[0;36m"
+        echo "    ______   ____     ____    ______     _    __   ____    ____ "
+        echo "   / ____/  / __ \   / __ \  / ____/    | |  / /  / __ \  / ___/ "
+        echo "  / /__    / /_/ /  / / / / / / __      | | / /  / /_/ /  \\__ \\  "
+        echo " / /___   / _, _/  / /_/ / / /_/ /      | |/ /  / ____/  ___/ /  "
+        echo "/_____/  /_/ |_|   \\____/  \\____/       |___/  /_/      /____/   "
+        echo -e "\033[0m"
+        echo "============================================================"
+        echo "  服务运行日志查看"
+        echo "============================================================"
+        echo "  1. 查看 sing-box 节点主进程日志"
+        echo "  2. 查看 cloudflared Argo 节点穿透日志"
+        echo "------------------------------------------------------------"
+        echo "  0. 返回主菜单"
+        echo "============================================================"
+        read -p "请选择操作 [0-2]: " log_choice
+        case $log_choice in
+            1)
+                echo "========== sing-box 日志 (最近 30 行) =========="
+                if $IS_OPENRC; then
+                    tail -n 30 /var/log/sing-box.log 2>/dev/null
+                else
+                    journalctl -u sing-box -n 30 --no-pager
+                fi
+                echo "================================================="
+                read -p "按回车键继续..." temp
+                ;;
+            2)
+                echo "========== Argo 穿透日志 (最近 30 行) =========="
+                if $IS_OPENRC; then
+                    tail -n 30 /var/log/argo-tunnel.log 2>/dev/null
+                else
+                    journalctl -u argo-tunnel -n 30 --no-pager
+                fi
+                echo "================================================="
+                read -p "按回车键继续..." temp
+                ;;
+            0)
+                break
+                ;;
+            *)
+                echo "无效选项！"
+                ;;
+        esac
+    done
+}
+
 while true; do
     echo "=================================================="
     echo "          Sing-box 快捷管理工具 sb"
@@ -996,9 +1045,10 @@ while true; do
     echo "4. 查看 Argo 隧道实时域名与连接状态"
     echo "5. 修改已搭建节点参数"
     echo "6. 彻底卸载脚本环境"
+    echo "9. 查看运行日志"
     echo "0. 退出"
     echo "=================================================="
-    read -p "请输入选项 [0-6]: " menu_choice
+    read -p "请输入选项 [0-9]: " menu_choice
     case $menu_choice in
         1)
             if [[ -f /etc/s-box/info.log ]]; then
@@ -1066,6 +1116,9 @@ while true; do
                 echo "清理完成！"
                 exit 0
             fi
+            ;;
+        9)
+            view_logs
             ;;
         0)
             exit 0
