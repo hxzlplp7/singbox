@@ -1225,13 +1225,13 @@ log_info "正在安装必要的系统依赖..."
 if [[ "$release" == "CentOS" ]]; then
     log_info "正在通过 yum 安装依赖..."
     yum install -y epel-release
-    yum install -y jq openssl curl tar wget unzip gzip psmisc nginx cronie git
+    yum install -y jq openssl curl tar wget unzip gzip psmisc nginx cronie git xz
     systemctl enable crond >/dev/null 2>&1
     systemctl start crond >/dev/null 2>&1
 else
     log_info "正在通过 apt 安装依赖..."
     apt-get update -y
-    apt-get install -y jq openssl curl tar wget unzip gzip psmisc nginx cron git
+    apt-get install -y jq openssl curl tar wget unzip gzip psmisc nginx cron git xz-utils
     systemctl enable cron >/dev/null 2>&1
     systemctl start cron >/dev/null 2>&1
 fi
