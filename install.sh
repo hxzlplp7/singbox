@@ -408,17 +408,21 @@ update_argo_domain() {
     if [[ ! -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
         return
     fi
+    # 清空旧日志，避免提取到旧域名
+    : > /var/log/argo-tunnel.log 2>/dev/null
+    : > /var/log/argo-tunnel.err 2>/dev/null
+    service_restart argo-tunnel
     echo "正在等待 Argo 隧道上线并获取临时域名..."
-    sleep 6
+    sleep 8
     local argo_domain=""
-    for i in {1..5}; do
+    for i in {1..10}; do
         if $IS_OPENRC; then
-            argo_domain=$(cat /var/log/argo-tunnel.log /var/log/argo-tunnel.err 2>/dev/null | tail -n 100 | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+            argo_domain=$(cat /var/log/argo-tunnel.log /var/log/argo-tunnel.err 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | tail -n 1)
         else
-            argo_domain=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+            argo_domain=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | tail -n 1)
         fi
         [[ -n "$argo_domain" ]] && break
-        sleep 2
+        sleep 3
     done
     if [[ -n "$argo_domain" ]]; then
         echo "$argo_domain" > /etc/s-box/argo.log
@@ -1760,6 +1764,9 @@ depend() {
 EOF
         chmod +x /etc/init.d/argo-tunnel
         service_enable argo-tunnel
+        # 清空旧日志，避免提取到旧域名
+        : > /var/log/argo-tunnel.log 2>/dev/null
+        : > /var/log/argo-tunnel.err 2>/dev/null
         service_restart argo-tunnel
     else
         cat > /etc/systemd/system/argo-tunnel.service <<EOF
@@ -1789,14 +1796,14 @@ EOF
     ARGO_DOMAIN=""
     for i in {1..5}; do
         if $IS_OPENRC; then
-            ARGO_DOMAIN=$(cat /var/log/argo-tunnel.log /var/log/argo-tunnel.err 2>/dev/null | tail -n 100 | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+            ARGO_DOMAIN=$(cat /var/log/argo-tunnel.log /var/log/argo-tunnel.err 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | tail -n 1)
         else
-            ARGO_DOMAIN=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | head -n 1)
+            ARGO_DOMAIN=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | tail -n 1)
         fi
         if [[ -n "$ARGO_DOMAIN" ]]; then
             break
         fi
-        sleep 2
+        sleep 3
     done
 
     if [[ -z "$ARGO_DOMAIN" ]]; then
