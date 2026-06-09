@@ -1288,17 +1288,35 @@ if systemctl list-unit-files | grep -q "clash.service"; then
 fi
 
 # 6. 配置并融合 Mihomo 订阅
-if [[ -f "/root/clashctl/config.yaml" ]]; then
-    # 移除原冲突项
-    sed -i '/^port:/d' /root/clashctl/config.yaml
-    sed -i '/^socks-port:/d' /root/clashctl/config.yaml
-    sed -i '/^mixed-port:/d' /root/clashctl/config.yaml
-    sed -i '/^external-controller:/d' /root/clashctl/config.yaml
-    sed -i '/^external-ui:/d' /root/clashctl/config.yaml
-    sed -i '/^secret:/d' /root/clashctl/config.yaml
-    
-    # 注入出站重定向及控制
-    cat <<EOF >> /root/clashctl/config.yaml
+if [[ ! -f "/root/clashctl/config.yaml" ]]; then
+    log_warn "订阅下载或转换失败，已自动生成本地备用默认配置..."
+    mkdir -p /root/clashctl
+    # 尝试在克隆目录中寻找默认模板
+    local template_file=$(find /root/clash-for-linux-install -name "template.yaml" -o -name "config.yaml" 2>/dev/null | head -n 1)
+    if [[ -n "$template_file" && -f "$template_file" ]]; then
+        cp "$template_file" /root/clashctl/config.yaml
+    else
+        cat > /root/clashctl/config.yaml <<EOF
+mode: rule
+log-level: info
+allow-lan: true
+proxies:
+  - name: "DIRECT"
+    type: direct
+EOF
+    fi
+fi
+
+# 移除原冲突项
+sed -i '/^port:/d' /root/clashctl/config.yaml
+sed -i '/^socks-port:/d' /root/clashctl/config.yaml
+sed -i '/^mixed-port:/d' /root/clashctl/config.yaml
+sed -i '/^external-controller:/d' /root/clashctl/config.yaml
+sed -i '/^external-ui:/d' /root/clashctl/config.yaml
+sed -i '/^secret:/d' /root/clashctl/config.yaml
+
+# 注入出站重定向及控制
+cat <<EOF >> /root/clashctl/config.yaml
 
 # --- 自定义出站重定向配置 (Sing-box 桥接) ---
 mixed-port: ${MIHOMO_PORT}
@@ -1307,12 +1325,9 @@ secret: "${MIHOMO_SECRET}"
 external-ui: /root/clashctl/ui
 # --- 自定义配置结束 ---
 EOF
-    systemctl restart $SERVICE_NAME
-    log_info "Mihomo 订阅端口及安全连接密码注入成功！"
-else
-    log_err "部署后未发现配置文件 /root/clashctl/config.yaml"
-    exit 1
-fi
+
+systemctl restart $SERVICE_NAME
+log_info "Mihomo 订阅端口及安全连接密码注入成功！"
 
 # 7. 检测并容错部署 yacd 网页控制面板
 log_info "正在配置 Web 面板静态目录..."
