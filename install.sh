@@ -1412,8 +1412,8 @@ while true; do
             if crontab -l 2>/dev/null | grep -q "sb cron"; then
                 crontab -l | grep -v "sb cron" | crontab -
                 echo "已成功关闭自愈守护定时任务。"
-            else
                 (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/sb cron >> /etc/s-box/monitor.log 2>&1") | crontab -
+                : > /etc/s-box/monitor.log 2>/dev/null
                 echo "已成功开启自愈守护定时任务 (每分钟检测重启一次)。"
             fi
             read -p "按回车键继续..." temp
@@ -2261,6 +2261,7 @@ chmod +x /etc/s-box/uninstall.sh 2>/dev/null
 # 添加守护自愈定时任务（每分钟检查一次）
 if ! crontab -l 2>/dev/null | grep -q "sb cron"; then
     (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/sb cron >> /etc/s-box/monitor.log 2>&1") | crontab -
+    : > /etc/s-box/monitor.log 2>/dev/null
     log_info "已成功添加 Sing-box / Argo 服务监控守护定时任务。"
 fi
 
