@@ -231,6 +231,12 @@ regenerate_info_log() {
     if [[ -f /etc/s-box/argo.log ]]; then
         argo_domain=$(cat /etc/s-box/argo.log)
     fi
+    
+    local argo_mode="temp"
+    if [[ -f /etc/s-box/argo.conf ]]; then
+        source /etc/s-box/argo.conf
+        argo_mode=$ARGO_MODE
+    fi
 
     cat > /etc/s-box/info.log <<EOF2
 ==================================================
@@ -329,7 +335,11 @@ EOF2
     # Argo
     if [[ -n "$argo_domain" ]]; then
         echo "------------------【Argo穿透】--------------------" >> /etc/s-box/info.log
-        echo "Argo 临时域名: ${argo_domain}" >> /etc/s-box/info.log
+        if [[ "$argo_mode" == "token" ]]; then
+            echo "Argo 固定域名: ${argo_domain}" >> /etc/s-box/info.log
+        else
+            echo "Argo 临时域名: ${argo_domain}" >> /etc/s-box/info.log
+        fi
         echo "" >> /etc/s-box/info.log
 
         if jq -e '.inbounds[] | select(.tag=="vmess-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
@@ -950,6 +960,9 @@ modify_argo() {
         local argo_domain=""
         if [[ -f /etc/s-box/argo.conf ]]; then
             source /etc/s-box/argo.conf
+            argo_mode=$ARGO_MODE
+            argo_token=$ARGO_TOKEN
+            argo_domain=$ARGO_DOMAIN
         else
             if $IS_OPENRC; then
                 if grep -q "\--token" /etc/init.d/argo-tunnel 2>/dev/null; then
@@ -1106,7 +1119,7 @@ EOF_ARGO
                 local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf 2>/dev/null | head -n 1 | awk -F: '{print $2}')
                 [[ -z "$port_nginx" ]] && port_nginx=8401
                 echo -e "\033[1;33m【重要提示】请前往 Cloudflare Zero Trust 控制台，将该隧道对应的 Public Hostname 服务地址 (Service)"
-                echo -e "设置为: http://localhost:${port_nginx} (默认为 8080，请务必修改！)\033[0m"
+                echo -e "设置为: http://127.0.0.1:${port_nginx} (请务必使用 127.0.0.1，以避免 localhost 的 IPv6 解析冲突！)\033[0m"
                 ;;
             *)
                 echo "无效选项！"
@@ -2026,13 +2039,27 @@ fi
 
 # Argo 隧道服务（仅在启用 Argo 时）
 if is_enabled "$ENABLE_ARGO"; then
+    local argo_mode="temp"
+    local argo_token=""
+    local argo_domain=""
+    if [[ -f /etc/s-box/argo.conf ]]; then
+        source /etc/s-box/argo.conf
+        argo_mode=$ARGO_MODE
+        argo_token=$ARGO_TOKEN
+        argo_domain=$ARGO_DOMAIN
+    fi
+
     if $IS_OPENRC; then
+        local cf_args="tunnel --url http://127.0.0.1:${PORT_NGINX}"
+        if [[ "$argo_mode" == "token" ]]; then
+            cf_args="tunnel --no-autoupdate run --token ${argo_token}"
+        fi
         cat > /etc/init.d/argo-tunnel <<EOF
 #!/sbin/openrc-run
 name="argo-tunnel"
 description="Argo Tunnel Service"
 command="/usr/local/bin/cloudflared"
-command_args="tunnel --url http://127.0.0.1:${PORT_NGINX}"
+command_args="${cf_args}"
 command_background="yes"
 pidfile="/run/\${RC_SVCNAME}.pid"
 output_log="/var/log/argo-tunnel.log"
@@ -2048,6 +2075,10 @@ EOF
         : > /var/log/argo-tunnel.err 2>/dev/null
         service_restart argo-tunnel
     else
+        local cf_exec="/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${PORT_NGINX}"
+        if [[ "$argo_mode" == "token" ]]; then
+            cf_exec="/usr/local/bin/cloudflared tunnel --no-autoupdate run --token ${argo_token}"
+        fi
         cat > /etc/systemd/system/argo-tunnel.service <<EOF
 [Unit]
 Description=Argo Tunnel Service
@@ -2055,7 +2086,7 @@ After=network.target
 
 [Service]
 User=root
-ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${PORT_NGINX}
+ExecStart=${cf_exec}
 Restart=on-failure
 RestartSec=10
 
@@ -2068,37 +2099,47 @@ EOF
         systemctl restart argo-tunnel
     fi
 
-    log_info "正在等待 Argo 隧道上线，获取节点临时域名..."
-    sleep 6
+    if [[ "$argo_mode" == "token" ]]; then
+        ARGO_DOMAIN="${argo_domain}"
+        echo "$ARGO_DOMAIN" > /etc/s-box/argo.log
+        cat > /etc/s-box/argo.conf <<EOF_ARGO
+ARGO_MODE="token"
+ARGO_TOKEN="${argo_token}"
+ARGO_DOMAIN="${ARGO_DOMAIN}"
+EOF_ARGO
+    else
+        log_info "正在等待 Argo 隧道上线，获取节点临时域名..."
+        sleep 6
 
-    # 提取 trycloudflare 域名
-    ARGO_DOMAIN=""
-    for i in {1..5}; do
-        if $IS_OPENRC; then
-            ARGO_DOMAIN=$(cat /var/log/argo-tunnel.log /var/log/argo-tunnel.err 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | tail -n 1)
-        else
-            ARGO_DOMAIN=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | tail -n 1)
-        fi
-        if [[ -n "$ARGO_DOMAIN" ]]; then
-            break
-        fi
-        sleep 3
-    done
+        # 提取 trycloudflare 域名
+        ARGO_DOMAIN=""
+        for i in {1..5}; do
+            if $IS_OPENRC; then
+                ARGO_DOMAIN=$(cat /var/log/argo-tunnel.log /var/log/argo-tunnel.err 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | tail -n 1)
+            else
+                ARGO_DOMAIN=$(journalctl -u argo-tunnel -n 50 --no-pager | grep -oE '[a-zA-Z0-9.-]+\.trycloudflare\.com' | tail -n 1)
+            fi
+            if [[ -n "$ARGO_DOMAIN" ]]; then
+                break
+            fi
+            sleep 3
+        done
 
-    if [[ -z "$ARGO_DOMAIN" ]]; then
-        if $IS_OPENRC; then
-            log_warn "获取 Argo 域名超时，请稍后查看 /var/log/argo-tunnel.log。"
-        else
-            log_warn "获取 Argo 域名超时，请稍后使用 'journalctl -u argo-tunnel' 命令手动查看。"
+        if [[ -z "$ARGO_DOMAIN" ]]; then
+            if $IS_OPENRC; then
+                log_warn "获取 Argo 域名超时，请稍后查看 /var/log/argo-tunnel.log。"
+            else
+                log_warn "获取 Argo 域名超时，请稍后使用 'journalctl -u argo-tunnel' 命令手动查看。"
+            fi
+            ARGO_DOMAIN="[未获取到Argo域名]"
         fi
-        ARGO_DOMAIN="[未获取到Argo域名]"
-    fi
-    echo "$ARGO_DOMAIN" > /etc/s-box/argo.log
-    cat > /etc/s-box/argo.conf <<EOF_ARGO
+        echo "$ARGO_DOMAIN" > /etc/s-box/argo.log
+        cat > /etc/s-box/argo.conf <<EOF_ARGO
 ARGO_MODE="temp"
 ARGO_TOKEN=""
 ARGO_DOMAIN="${ARGO_DOMAIN}"
 EOF_ARGO
+    fi
 fi
 
 # 11. 节点输出与分享链接生成
@@ -2178,7 +2219,11 @@ fi
 # 动态追加 Argo 链接
 if is_enabled "$ENABLE_ARGO"; then
     echo "------------------【Argo穿透】--------------------" >> /etc/s-box/info.log
-    echo "Argo 临时域名: ${ARGO_DOMAIN}" >> /etc/s-box/info.log
+    if [[ "$argo_mode" == "token" ]]; then
+        echo "Argo 固定域名: ${ARGO_DOMAIN}" >> /etc/s-box/info.log
+    else
+        echo "Argo 临时域名: ${ARGO_DOMAIN}" >> /etc/s-box/info.log
+    fi
     echo "" >> /etc/s-box/info.log
 
     if is_enabled "$ENABLE_VMESS"; then
