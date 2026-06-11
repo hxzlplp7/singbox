@@ -1265,7 +1265,7 @@ view_logs() {
 }
 
 if [[ "$1" == "cron" ]]; then
-    local log_file="/etc/s-box/monitor.log"
+    log_file="/etc/s-box/monitor.log"
     # 如果日志文件超过 50KB 则进行清空截断，避免体积无限膨胀
     if [[ -f "$log_file" && $(wc -c < "$log_file") -gt 51200 ]]; then
         : > "$log_file"
@@ -1283,7 +1283,7 @@ if [[ "$1" == "cron" ]]; then
             service_restart argo-tunnel
             
             # 判断 argo 模式
-            local argo_mode="temp"
+            argo_mode="temp"
             if [[ -f /etc/s-box/argo.conf ]]; then
                 source /etc/s-box/argo.conf
                 argo_mode=$ARGO_MODE
