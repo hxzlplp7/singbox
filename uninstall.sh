@@ -82,4 +82,10 @@ rm -rf /etc/s-box
 rm -f /usr/local/bin/cloudflared
 rm -f /usr/local/bin/sb
 
+# 5. 清理 cron 守护任务
+log_info "正在清理定时守护任务..."
+if crontab -l 2>/dev/null | grep -q "sb cron"; then
+    crontab -l | grep -v "sb cron" | crontab -
+fi
+
 log_info "卸载完成！"

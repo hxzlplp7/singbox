@@ -1253,6 +1253,44 @@ view_logs() {
     done
 }
 
+if [[ "$1" == "cron" ]]; then
+    # 监测并重启 sing-box
+    if ! service_is_active sing-box; then
+        service_restart sing-box
+    fi
+    
+    # 检查是否配置了 Argo
+    if [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
+        if ! service_is_active argo-tunnel; then
+            service_restart argo-tunnel
+            
+            # 判断 argo 模式
+            local argo_mode="temp"
+            if [[ -f /etc/s-box/argo.conf ]]; then
+                source /etc/s-box/argo.conf
+                argo_mode=$ARGO_MODE
+            else
+                if $IS_OPENRC; then
+                    if grep -q "\--token" /etc/init.d/argo-tunnel 2>/dev/null; then
+                        argo_mode="token"
+                    fi
+                else
+                    if grep -q "\--token" /etc/systemd/system/argo-tunnel.service 2>/dev/null; then
+                        argo_mode="token"
+                    fi
+                fi
+            fi
+            
+            # 只有在临时模式下才需要重新抓取临时域名
+            if [[ "$argo_mode" == "temp" ]]; then
+                update_argo_domain
+            fi
+            regenerate_info_log
+        fi
+    fi
+    exit 0
+fi
+
 while true; do
     echo "=================================================="
     echo "          Sing-box 快捷管理工具 sb"
@@ -1334,6 +1372,9 @@ while true; do
                     systemctl daemon-reload
                 fi
                 rm -rf /etc/s-box /usr/local/bin/cloudflared /usr/local/bin/sb
+                if crontab -l 2>/dev/null | grep -q "sb cron"; then
+                    crontab -l | grep -v "sb cron" | crontab -
+                fi
                 service_restart nginx
                 echo "清理完成！"
                 exit 0
@@ -2178,6 +2219,12 @@ else
         || wget -qO /etc/s-box/uninstall.sh https://raw.githubusercontent.com/hxzlplp7/singbox/main/uninstall.sh 2>/dev/null
 fi
 chmod +x /etc/s-box/uninstall.sh 2>/dev/null
+
+# 添加守护自愈定时任务（每分钟检查一次）
+if ! crontab -l 2>/dev/null | grep -q "sb cron"; then
+    (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/sb cron >/dev/null 2>&1") | crontab -
+    log_info "已成功添加 Sing-box / Argo 服务监控守护定时任务。"
+fi
 
 # 打印信息到终端
 cat /etc/s-box/info.log
