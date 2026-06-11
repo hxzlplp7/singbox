@@ -1001,7 +1001,7 @@ modify_argo() {
                 [[ -z "$port_nginx" ]] && port_nginx=8401
                 
                 if $IS_OPENRC; then
-                    cat > /etc/init.d/argo-tunnel <<EOF
+                    cat > /etc/init.d/argo-tunnel <<EOF_INIT
 #!/sbin/openrc-run
 name="argo-tunnel"
 description="Argo Tunnel Service"
@@ -1014,10 +1014,10 @@ error_log="/var/log/argo-tunnel.log"
 depend() {
     need net sing-box nginx
 }
-EOF
+EOF_INIT
                     chmod +x /etc/init.d/argo-tunnel
                 else
-                    cat > /etc/systemd/system/argo-tunnel.service <<EOF
+                    cat > /etc/systemd/system/argo-tunnel.service <<EOF_SYSTEMD
 [Unit]
 Description=Argo Tunnel Service
 After=network.target
@@ -1030,15 +1030,15 @@ RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF_SYSTEMD
                     systemctl daemon-reload
                 fi
                 
-                cat > /etc/s-box/argo.conf <<EOF
+                cat > /etc/s-box/argo.conf <<EOF_ARGO
 ARGO_MODE="temp"
 ARGO_TOKEN=""
 ARGO_DOMAIN=""
-EOF
+EOF_ARGO
                 
                 service_restart argo-tunnel
                 update_argo_domain
@@ -1060,7 +1060,7 @@ EOF
                 echo "正在配置固定域名隧道..."
                 
                 if $IS_OPENRC; then
-                    cat > /etc/init.d/argo-tunnel <<EOF
+                    cat > /etc/init.d/argo-tunnel <<EOF_INIT
 #!/sbin/openrc-run
 name="argo-tunnel"
 description="Argo Tunnel Service"
@@ -1073,10 +1073,10 @@ error_log="/var/log/argo-tunnel.log"
 depend() {
     need net sing-box nginx
 }
-EOF
+EOF_INIT
                     chmod +x /etc/init.d/argo-tunnel
                 else
-                    cat > /etc/systemd/system/argo-tunnel.service <<EOF
+                    cat > /etc/systemd/system/argo-tunnel.service <<EOF_SYSTEMD
 [Unit]
 Description=Argo Tunnel Service
 After=network.target
@@ -1089,15 +1089,15 @@ RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF_SYSTEMD
                     systemctl daemon-reload
                 fi
                 
-                cat > /etc/s-box/argo.conf <<EOF
+                cat > /etc/s-box/argo.conf <<EOF_ARGO
 ARGO_MODE="token"
 ARGO_TOKEN="${new_token}"
 ARGO_DOMAIN="${new_domain}"
-EOF
+EOF_ARGO
                 echo "$new_domain" > /etc/s-box/argo.log
                 
                 service_restart argo-tunnel
@@ -2011,11 +2011,11 @@ EOF
         ARGO_DOMAIN="[未获取到Argo域名]"
     fi
     echo "$ARGO_DOMAIN" > /etc/s-box/argo.log
-    cat > /etc/s-box/argo.conf <<EOF
+    cat > /etc/s-box/argo.conf <<EOF_ARGO
 ARGO_MODE="temp"
 ARGO_TOKEN=""
 ARGO_DOMAIN="${ARGO_DOMAIN}"
-EOF
+EOF_ARGO
 fi
 
 # 11. 节点输出与分享链接生成
