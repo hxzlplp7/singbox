@@ -1103,6 +1103,10 @@ EOF_ARGO
                 service_restart argo-tunnel
                 regenerate_info_log
                 echo "成功配置并启用固定域名隧道！"
+                local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf 2>/dev/null | head -n 1 | awk -F: '{print $2}')
+                [[ -z "$port_nginx" ]] && port_nginx=8401
+                echo -e "\033[1;33m【重要提示】请前往 Cloudflare Zero Trust 控制台，将该隧道对应的 Public Hostname 服务地址 (Service)"
+                echo -e "设置为: http://localhost:${port_nginx} (默认为 8080，请务必修改！)\033[0m"
                 ;;
             *)
                 echo "无效选项！"
