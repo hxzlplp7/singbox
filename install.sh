@@ -1218,10 +1218,11 @@ view_logs() {
         echo "============================================================"
         echo "  1. 查看 sing-box 节点主进程日志"
         echo "  2. 查看 cloudflared Argo 节点穿透日志"
+        echo "  3. 查看服务自愈守护日志"
         echo "------------------------------------------------------------"
         echo "  0. 返回主菜单"
         echo "============================================================"
-        read -p "请选择操作 [0-2]: " log_choice
+        read -p "请选择操作 [0-3]: " log_choice
         case $log_choice in
             1)
                 echo "========== sing-box 日志 (最近 30 行) =========="
@@ -1243,6 +1244,16 @@ view_logs() {
                 echo "================================================="
                 read -p "按回车键继续..." temp
                 ;;
+            3)
+                echo "========== 自愈守护日志 (最近 30 行) =========="
+                if [[ -f /etc/s-box/monitor.log ]]; then
+                    tail -n 30 /etc/s-box/monitor.log 2>/dev/null
+                else
+                    echo "暂无自愈守护日志。"
+                fi
+                echo "================================================="
+                read -p "按回车键继续..." temp
+                ;;
             0)
                 break
                 ;;
@@ -1254,9 +1265,16 @@ view_logs() {
 }
 
 if [[ "$1" == "cron" ]]; then
+    local log_file="/etc/s-box/monitor.log"
+    # 如果日志文件超过 50KB 则进行清空截断，避免体积无限膨胀
+    if [[ -f "$log_file" && $(wc -c < "$log_file") -gt 51200 ]]; then
+        : > "$log_file"
+    fi
+
     # 监测并重启 sing-box
     if ! service_is_active sing-box; then
         service_restart sing-box
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - [自愈守护] 检测到 Sing-box 未运行，已自动拉起！" >> "$log_file"
     fi
     
     # 检查是否配置了 Argo
@@ -1286,12 +1304,21 @@ if [[ "$1" == "cron" ]]; then
                 update_argo_domain
             fi
             regenerate_info_log
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - [自愈守护] 检测到 Argo 隧道未运行，已自动拉起并重置配置！" >> "$log_file"
         fi
     fi
     exit 0
 fi
 
 while true; do
+    check_cron_status() {
+        if crontab -l 2>/dev/null | grep -q "sb cron"; then
+            echo -e "\033[0;32m已启用\033[0m"
+        else
+            echo -e "\033[0;31m已禁用\033[0m"
+        fi
+    }
+
     echo "=================================================="
     echo "          Sing-box 快捷管理工具 sb"
     echo "=================================================="
@@ -1302,6 +1329,7 @@ while true; do
     echo "5. 修改已搭建节点参数"
     echo "6. 配置 Argo 隧道参数"
     echo "7. 彻底卸载脚本环境"
+    echo "8. 开启/关闭服务自愈守护任务 (当前: $(check_cron_status))"
     echo "9. 查看运行日志"
     echo "0. 退出"
     echo "=================================================="
@@ -1379,6 +1407,16 @@ while true; do
                 echo "清理完成！"
                 exit 0
             fi
+            ;;
+        8)
+            if crontab -l 2>/dev/null | grep -q "sb cron"; then
+                crontab -l | grep -v "sb cron" | crontab -
+                echo "已成功关闭自愈守护定时任务。"
+            else
+                (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/sb cron >> /etc/s-box/monitor.log 2>&1") | crontab -
+                echo "已成功开启自愈守护定时任务 (每分钟检测重启一次)。"
+            fi
+            read -p "按回车键继续..." temp
             ;;
         9)
             view_logs
@@ -2222,7 +2260,7 @@ chmod +x /etc/s-box/uninstall.sh 2>/dev/null
 
 # 添加守护自愈定时任务（每分钟检查一次）
 if ! crontab -l 2>/dev/null | grep -q "sb cron"; then
-    (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/sb cron >/dev/null 2>&1") | crontab -
+    (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/sb cron >> /etc/s-box/monitor.log 2>&1") | crontab -
     log_info "已成功添加 Sing-box / Argo 服务监控守护定时任务。"
 fi
 
