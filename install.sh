@@ -408,6 +408,24 @@ update_argo_domain() {
     if [[ ! -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
         return
     fi
+    # 如果是 token 模式，不需要自动获取临时域名，直接返回
+    if [[ -f /etc/s-box/argo.conf ]]; then
+        source /etc/s-box/argo.conf
+        if [[ "$ARGO_MODE" == "token" ]]; then
+            return
+        fi
+    else
+        # 兼容性检测，通过检测服务文件
+        if $IS_OPENRC; then
+            if grep -q "\--token" /etc/init.d/argo-tunnel 2>/dev/null; then
+                return
+            fi
+        else
+            if grep -q "\--token" /etc/systemd/system/argo-tunnel.service 2>/dev/null; then
+                return
+            fi
+        fi
+    fi
     # 清空旧日志，避免提取到旧域名
     : > /var/log/argo-tunnel.log 2>/dev/null
     : > /var/log/argo-tunnel.err 2>/dev/null
@@ -919,6 +937,180 @@ modify_anytls() {
     done
 }
 
+modify_argo() {
+    if [[ ! -f /usr/local/bin/cloudflared ]]; then
+        echo "错误：未安装 Cloudflared，无法配置 Argo 隧道！"
+        read -p "按回车键继续..." temp
+        return
+    fi
+
+    while true; do
+        local argo_mode="temp"
+        local argo_token=""
+        local argo_domain=""
+        if [[ -f /etc/s-box/argo.conf ]]; then
+            source /etc/s-box/argo.conf
+        else
+            if $IS_OPENRC; then
+                if grep -q "\--token" /etc/init.d/argo-tunnel 2>/dev/null; then
+                    argo_mode="token"
+                    argo_token=$(grep -oE "\--token[[:space:]]+[^[:space:]]+" /etc/init.d/argo-tunnel 2>/dev/null | awk '{print $2}')
+                fi
+            else
+                if grep -q "\--token" /etc/systemd/system/argo-tunnel.service 2>/dev/null; then
+                    argo_mode="token"
+                    argo_token=$(grep -oE "\--token[[:space:]]+[^[:space:]]+" /etc/systemd/system/argo-tunnel.service 2>/dev/null | awk '{print $2}')
+                fi
+            fi
+            if [[ -f /etc/s-box/argo.log ]]; then
+                argo_domain=$(cat /etc/s-box/argo.log)
+            fi
+        fi
+
+        echo "--------------------------------------------------"
+        echo "          Argo 隧道参数修改"
+        echo "--------------------------------------------------"
+        if [[ "$argo_mode" == "token" ]]; then
+            echo "当前模式: 固定域名隧道 (Token 模式)"
+            echo "自备域名: $argo_domain"
+            echo "Token值 : ${argo_token:0:15}... (已隐藏后续字符)"
+        else
+            echo "当前模式: 临时域名隧道 (TryCloudflare 模式)"
+            echo "临时域名: $argo_domain"
+        fi
+        echo "--------------------------------------------------"
+        echo "1. 切换为 临时域名隧道 (trycloudflare.com)"
+        echo "2. 切换为 固定域名隧道 (使用 Cloudflare Tunnel Token)"
+        echo "0. 返回"
+        echo "--------------------------------------------------"
+        read -p "请选择修改项 [0-2]: " argo_choice
+        
+        if [[ "$argo_choice" == "0" || -z "$argo_choice" ]]; then
+            break
+        fi
+        
+        case $argo_choice in
+            1)
+                if [[ "$argo_mode" == "temp" ]]; then
+                    echo "当前已是临时隧道模式，无需切换。"
+                    continue
+                fi
+                echo "正在切换为临时域名隧道模式..."
+                
+                local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf 2>/dev/null | head -n 1 | awk -F: '{print $2}')
+                [[ -z "$port_nginx" ]] && port_nginx=8401
+                
+                if $IS_OPENRC; then
+                    cat > /etc/init.d/argo-tunnel <<EOF
+#!/sbin/openrc-run
+name="argo-tunnel"
+description="Argo Tunnel Service"
+command="/usr/local/bin/cloudflared"
+command_args="tunnel --url http://127.0.0.1:${port_nginx}"
+command_background="yes"
+pidfile="/run/\${RC_SVCNAME}.pid"
+output_log="/var/log/argo-tunnel.log"
+error_log="/var/log/argo-tunnel.log"
+depend() {
+    need net sing-box nginx
+}
+EOF
+                    chmod +x /etc/init.d/argo-tunnel
+                else
+                    cat > /etc/systemd/system/argo-tunnel.service <<EOF
+[Unit]
+Description=Argo Tunnel Service
+After=network.target
+
+[Service]
+User=root
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${port_nginx}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+                    systemctl daemon-reload
+                fi
+                
+                cat > /etc/s-box/argo.conf <<EOF
+ARGO_MODE="temp"
+ARGO_TOKEN=""
+ARGO_DOMAIN=""
+EOF
+                
+                service_restart argo-tunnel
+                update_argo_domain
+                regenerate_info_log
+                echo "成功切换为临时域名隧道模式！"
+                ;;
+            2)
+                read -p "请输入您的 Cloudflare Tunnel Token: " new_token
+                if [[ -z "$new_token" ]]; then
+                    echo "错误：Token 不能为空！"
+                    continue
+                fi
+                read -p "请输入您在 Cloudflare 上为该隧道绑定的自定义域名 (如: argo.example.com): " new_domain
+                if [[ -z "$new_domain" ]]; then
+                    echo "错误：自定义域名不能为空！"
+                    continue
+                fi
+                
+                echo "正在配置固定域名隧道..."
+                
+                if $IS_OPENRC; then
+                    cat > /etc/init.d/argo-tunnel <<EOF
+#!/sbin/openrc-run
+name="argo-tunnel"
+description="Argo Tunnel Service"
+command="/usr/local/bin/cloudflared"
+command_args="tunnel --no-autoupdate run --token ${new_token}"
+command_background="yes"
+pidfile="/run/\${RC_SVCNAME}.pid"
+output_log="/var/log/argo-tunnel.log"
+error_log="/var/log/argo-tunnel.log"
+depend() {
+    need net sing-box nginx
+}
+EOF
+                    chmod +x /etc/init.d/argo-tunnel
+                else
+                    cat > /etc/systemd/system/argo-tunnel.service <<EOF
+[Unit]
+Description=Argo Tunnel Service
+After=network.target
+
+[Service]
+User=root
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token ${new_token}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+                    systemctl daemon-reload
+                fi
+                
+                cat > /etc/s-box/argo.conf <<EOF
+ARGO_MODE="token"
+ARGO_TOKEN="${new_token}"
+ARGO_DOMAIN="${new_domain}"
+EOF
+                echo "$new_domain" > /etc/s-box/argo.log
+                
+                service_restart argo-tunnel
+                regenerate_info_log
+                echo "成功配置并启用固定域名隧道！"
+                ;;
+            *)
+                echo "无效选项！"
+                ;;
+        esac
+    done
+}
+
 modify_node_params() {
     if [[ ! -f /etc/s-box/sb.json ]]; then
         echo "错误：未找到配置文件 /etc/s-box/sb.json"
@@ -1066,7 +1258,8 @@ while true; do
     echo "3. 停止 Sing-box 和 Argo 隧道服务"
     echo "4. 查看 Argo 隧道实时域名与连接状态"
     echo "5. 修改已搭建节点参数"
-    echo "6. 彻底卸载脚本环境"
+    echo "6. 配置 Argo 隧道参数"
+    echo "7. 彻底卸载脚本环境"
     echo "9. 查看运行日志"
     echo "0. 退出"
     echo "=================================================="
@@ -1112,6 +1305,9 @@ while true; do
             modify_node_params
             ;;
         6)
+            modify_argo
+            ;;
+        7)
             if [[ -f /etc/s-box/uninstall.sh ]]; then
                 bash /etc/s-box/uninstall.sh
                 exit 0
@@ -1815,6 +2011,11 @@ EOF
         ARGO_DOMAIN="[未获取到Argo域名]"
     fi
     echo "$ARGO_DOMAIN" > /etc/s-box/argo.log
+    cat > /etc/s-box/argo.conf <<EOF
+ARGO_MODE="temp"
+ARGO_TOKEN=""
+ARGO_DOMAIN="${ARGO_DOMAIN}"
+EOF
 fi
 
 # 11. 节点输出与分享链接生成
