@@ -203,9 +203,15 @@ regenerate_nginx_conf() {
     }"
     fi
     
+    local listen_ipv6=""
+    if [[ -f /proc/sys/net/ipv6/conf/all/disable_ipv6 && $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6) -ne 1 ]]; then
+        listen_ipv6="listen [::1]:${port_nginx};"
+    fi
+
     cat > ${NGINX_CONF_DIR}/singbox-argo.conf <<EOF2
 server {
     listen 127.0.0.1:${port_nginx};
+    ${listen_ipv6}
     server_name localhost;
     \${nginx_locations}
 }
@@ -1964,9 +1970,15 @@ if is_enabled "$ENABLE_ARGO"; then
     rm -f ${NGINX_CONF_DIR}/default.conf 2>/dev/null
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null
 
+    local listen_ipv6=""
+    if [[ -f /proc/sys/net/ipv6/conf/all/disable_ipv6 && $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6) -ne 1 ]]; then
+        listen_ipv6="listen [::1]:${PORT_NGINX};"
+    fi
+
     cat > ${NGINX_CONF_DIR}/singbox-argo.conf <<EOF
 server {
     listen 127.0.0.1:${PORT_NGINX};
+    ${listen_ipv6}
     server_name localhost;
     ${nginx_locations}
 }
