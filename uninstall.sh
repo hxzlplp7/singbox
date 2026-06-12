@@ -71,14 +71,25 @@ else
     systemctl daemon-reload
 fi
 
-# 3. 清理 Nginx 反代配置
-log_info "正在清理 Nginx 配置..."
-if [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
-    rm -f ${NGINX_CONF_DIR}/singbox-argo.conf
-    if which nginx >/dev/null 2>&1 || command -v nginx >/dev/null 2>&1; then
-        service_restart nginx
-    fi
+# 3. 彻底卸载并清理 Nginx 服务
+log_info "正在彻底卸载并清理 Nginx 服务..."
+service_stop nginx
+service_disable nginx
+
+# 清理配置文件
+rm -f ${NGINX_CONF_DIR}/singbox-argo.conf
+rm -rf /etc/nginx 2>/dev/null
+
+# 检测并执行包管理器卸载
+if which apk >/dev/null 2>&1; then
+    apk del nginx >/dev/null 2>&1
+elif which apt-get >/dev/null 2>&1; then
+    apt-get purge -y nginx nginx-common >/dev/null 2>&1
+    apt-get autoremove -y >/dev/null 2>&1
+elif which yum >/dev/null 2>&1; then
+    yum remove -y nginx >/dev/null 2>&1
 fi
+
 
 # 4. 删除二进制文件和数据目录
 log_info "正在删除安装目录及二进制程序..."
