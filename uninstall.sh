@@ -73,8 +73,12 @@ fi
 
 # 3. 清理 Nginx 反代配置
 log_info "正在清理 Nginx 配置..."
-rm -f ${NGINX_CONF_DIR}/singbox-argo.conf
-service_restart nginx
+if [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
+    rm -f ${NGINX_CONF_DIR}/singbox-argo.conf
+    if which nginx >/dev/null 2>&1 || command -v nginx >/dev/null 2>&1; then
+        service_restart nginx
+    fi
+fi
 
 # 4. 删除二进制文件和数据目录
 log_info "正在删除安装目录及二进制程序..."

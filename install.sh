@@ -97,6 +97,14 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+# 自动加载 Argo 配置
+USE_NGINX="y"
+ARGO_PORT=""
+ARGO_TARGET_PROTOCOL=""
+if [[ -f /etc/s-box/argo.conf ]]; then
+    source /etc/s-box/argo.conf
+fi
+
 # 自动检测是否为 OpenRC (Alpine 等)
 IS_OPENRC=false
 if [[ -x "/sbin/openrc-run" || -x "/sbin/runlevels" ]]; then
@@ -164,6 +172,9 @@ service_disable() {
 
 # 重新生成 Nginx 配置
 regenerate_nginx_conf() {
+    if ! is_enabled "$USE_NGINX"; then
+        return
+    fi
     if [[ ! -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
         return
     fi
@@ -348,10 +359,11 @@ EOF2
         fi
         echo "" >> /etc/s-box/info.log
 
-        if jq -e '.inbounds[] | select(.tag=="vmess-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
-            local uuid_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .users[0].uuid' /etc/s-box/sb.json)
-            local path_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .transport.path' /etc/s-box/sb.json)
-            local vmess_argo_json=$(cat <<EOF2
+        if is_enabled "$USE_NGINX"; then
+            if jq -e '.inbounds[] | select(.tag=="vmess-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+                local uuid_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .users[0].uuid' /etc/s-box/sb.json)
+                local path_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .transport.path' /etc/s-box/sb.json)
+                local vmess_argo_json=$(cat <<EOF2
 {
   "v": "2",
   "ps": "SB-VMess-Argo-80",
@@ -369,9 +381,9 @@ EOF2
 }
 EOF2
 )
-            local vmess_argo_80_link="vmess://$(echo -n "$vmess_argo_json" | base64 -w 0)"
+                local vmess_argo_80_link="vmess://$(echo -n "$vmess_argo_json" | base64 -w 0)"
 
-            local vmess_argo_tls_json=$(cat <<EOF2
+                local vmess_argo_tls_json=$(cat <<EOF2
 {
   "v": "2",
   "ps": "SB-VMess-Argo-443",
@@ -389,30 +401,97 @@ EOF2
 }
 EOF2
 )
-            local vmess_argo_443_link="vmess://$(echo -n "$vmess_argo_tls_json" | base64 -w 0)"
+                local vmess_argo_443_link="vmess://$(echo -n "$vmess_argo_tls_json" | base64 -w 0)"
 
-            echo "1. VMess Argo (80端口):" >> /etc/s-box/info.log
-            echo "${vmess_argo_80_link}" >> /etc/s-box/info.log
-            echo "" >> /etc/s-box/info.log
-            echo "2. VMess Argo (443端口/TLS):" >> /etc/s-box/info.log
-            echo "${vmess_argo_443_link}" >> /etc/s-box/info.log
-            echo "" >> /etc/s-box/info.log
-        fi
+                echo "1. VMess Argo (80端口):" >> /etc/s-box/info.log
+                echo "${vmess_argo_80_link}" >> /etc/s-box/info.log
+                echo "" >> /etc/s-box/info.log
+                echo "2. VMess Argo (443端口/TLS):" >> /etc/s-box/info.log
+                echo "${vmess_argo_443_link}" >> /etc/s-box/info.log
+                echo "" >> /etc/s-box/info.log
+            fi
 
-        if jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
-            local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .users[0].password' /etc/s-box/sb.json)
-            local path_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
-            local path_trojan_ws_encoded=$(echo -n "$path_trojan_ws" | jq -sRr @uri)
-            
-            local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-80"
-            local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${argo_domain}&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-443"
+            if jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+                local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .users[0].password' /etc/s-box/sb.json)
+                local path_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
+                local path_trojan_ws_encoded=$(echo -n "$path_trojan_ws" | jq -sRr @uri)
+                
+                local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-80"
+                local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${argo_domain}&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-443"
 
-            echo "3. Trojan Argo (80端口):" >> /etc/s-box/info.log
-            echo "${trojan_argo_80_link}" >> /etc/s-box/info.log
-            echo "" >> /etc/s-box/info.log
-            echo "4. Trojan Argo (443端口/TLS):" >> /etc/s-box/info.log
-            echo "${trojan_argo_443_link}" >> /etc/s-box/info.log
-            echo "" >> /etc/s-box/info.log
+                echo "3. Trojan Argo (80端口):" >> /etc/s-box/info.log
+                echo "${trojan_argo_80_link}" >> /etc/s-box/info.log
+                echo "" >> /etc/s-box/info.log
+                echo "4. Trojan Argo (443端口/TLS):" >> /etc/s-box/info.log
+                echo "${trojan_argo_443_link}" >> /etc/s-box/info.log
+                echo "" >> /etc/s-box/info.log
+            fi
+        else
+            # 免 Nginx 模式，根据绑定的目标协议生成相应的链接
+            if [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]] && jq -e '.inbounds[] | select(.tag=="vmess-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+                local uuid_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .users[0].uuid' /etc/s-box/sb.json)
+                local path_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .transport.path' /etc/s-box/sb.json)
+                local vmess_argo_json=$(cat <<EOF2
+{
+  "v": "2",
+  "ps": "SB-VMess-Argo-80",
+  "add": "cdn.2020111.xyz",
+  "port": "80",
+  "id": "${uuid_vmess}",
+  "aid": "0",
+  "scy": "auto",
+  "net": "ws",
+  "type": "none",
+  "host": "${argo_domain}",
+  "path": "${path_vmess}",
+  "tls": "none",
+  "sni": ""
+}
+EOF2
+)
+                local vmess_argo_80_link="vmess://$(echo -n "$vmess_argo_json" | base64 -w 0)"
+
+                local vmess_argo_tls_json=$(cat <<EOF2
+{
+  "v": "2",
+  "ps": "SB-VMess-Argo-443",
+  "add": "cdn.2020111.xyz",
+  "port": "443",
+  "id": "${uuid_vmess}",
+  "aid": "0",
+  "scy": "auto",
+  "net": "ws",
+  "type": "none",
+  "host": "${argo_domain}",
+  "path": "${path_vmess}",
+  "tls": "tls",
+  "sni": "${argo_domain}"
+}
+EOF2
+)
+                local vmess_argo_443_link="vmess://$(echo -n "$vmess_argo_tls_json" | base64 -w 0)"
+
+                echo "1. VMess Argo (80端口):" >> /etc/s-box/info.log
+                echo "${vmess_argo_80_link}" >> /etc/s-box/info.log
+                echo "" >> /etc/s-box/info.log
+                echo "2. VMess Argo (443端口/TLS):" >> /etc/s-box/info.log
+                echo "${vmess_argo_443_link}" >> /etc/s-box/info.log
+                echo "" >> /etc/s-box/info.log
+            elif [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]] && jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+                local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .users[0].password' /etc/s-box/sb.json)
+                local path_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
+                local path_trojan_ws_encoded=$(echo -n "$path_trojan_ws" | jq -sRr @uri)
+                
+                local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-80"
+                local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${argo_domain}&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-443"
+
+                echo "1. Trojan Argo (80端口):" >> /etc/s-box/info.log
+                echo "${trojan_argo_80_link}" >> /etc/s-box/info.log
+                echo "" >> /etc/s-box/info.log
+                echo "2. Trojan Argo (443端口/TLS):" >> /etc/s-box/info.log
+                echo "${trojan_argo_443_link}" >> /etc/s-box/info.log
+                echo "" >> /etc/s-box/info.log
+            fi
         fi
     fi
 
@@ -470,9 +549,17 @@ apply_changes() {
     echo "正在应用更改，重启 Sing-box 服务..."
     service_restart sing-box
     
-    if [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
+    if [[ -f /etc/s-box/argo.conf ]]; then
+        source /etc/s-box/argo.conf
+    fi
+    
+    if is_enabled "$USE_NGINX" && [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
         echo "正在重启 Nginx 和 Argo 服务..."
         regenerate_nginx_conf
+        service_restart argo-tunnel
+        update_argo_domain
+    elif [[ -f /etc/s-box/argo.conf ]]; then
+        echo "正在重启 Argo 服务..."
         service_restart argo-tunnel
         update_argo_domain
     fi
@@ -1016,8 +1103,14 @@ modify_argo() {
                 fi
                 echo "正在切换为临时域名隧道模式..."
                 
-                local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf 2>/dev/null | head -n 1 | awk -F: '{print $2}')
-                [[ -z "$port_nginx" ]] && port_nginx=8401
+                local argo_target_port="${ARGO_PORT}"
+                local argo_depend="net sing-box"
+                if is_enabled "$USE_NGINX"; then
+                    local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf 2>/dev/null | head -n 1 | awk -F: '{print $2}')
+                    [[ -z "$port_nginx" ]] && port_nginx=8401
+                    argo_target_port="${port_nginx}"
+                    argo_depend="net sing-box nginx"
+                fi
                 
                 if $IS_OPENRC; then
                     cat > /etc/init.d/argo-tunnel <<EOF_INIT
@@ -1025,13 +1118,13 @@ modify_argo() {
 name="argo-tunnel"
 description="Argo Tunnel Service"
 command="/usr/local/bin/cloudflared"
-command_args="tunnel --url http://127.0.0.1:${port_nginx}"
+command_args="tunnel --url http://127.0.0.1:${argo_target_port}"
 command_background="yes"
 pidfile="/run/\${RC_SVCNAME}.pid"
 output_log="/var/log/argo-tunnel.log"
 error_log="/var/log/argo-tunnel.log"
 depend() {
-    need net sing-box nginx
+    need ${argo_depend}
 }
 EOF_INIT
                     chmod +x /etc/init.d/argo-tunnel
@@ -1043,7 +1136,7 @@ After=network.target
 
 [Service]
 User=root
-ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${port_nginx}
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${argo_target_port}
 Restart=on-failure
 RestartSec=10
 
@@ -1057,6 +1150,9 @@ EOF_SYSTEMD
 ARGO_MODE="temp"
 ARGO_TOKEN=""
 ARGO_DOMAIN=""
+USE_NGINX="${USE_NGINX}"
+ARGO_PORT="${ARGO_PORT}"
+ARGO_TARGET_PROTOCOL="${ARGO_TARGET_PROTOCOL}"
 EOF_ARGO
                 
                 service_restart argo-tunnel
@@ -1078,6 +1174,11 @@ EOF_ARGO
                 
                 echo "正在配置固定域名隧道..."
                 
+                local argo_depend="net sing-box"
+                if is_enabled "$USE_NGINX"; then
+                    argo_depend="net sing-box nginx"
+                fi
+                
                 if $IS_OPENRC; then
                     cat > /etc/init.d/argo-tunnel <<EOF_INIT
 #!/sbin/openrc-run
@@ -1090,7 +1191,7 @@ pidfile="/run/\${RC_SVCNAME}.pid"
 output_log="/var/log/argo-tunnel.log"
 error_log="/var/log/argo-tunnel.log"
 depend() {
-    need net sing-box nginx
+    need ${argo_depend}
 }
 EOF_INIT
                     chmod +x /etc/init.d/argo-tunnel
@@ -1116,6 +1217,9 @@ EOF_SYSTEMD
 ARGO_MODE="token"
 ARGO_TOKEN="${new_token}"
 ARGO_DOMAIN="${new_domain}"
+USE_NGINX="${USE_NGINX}"
+ARGO_PORT="${ARGO_PORT}"
+ARGO_TARGET_PROTOCOL="${ARGO_TARGET_PROTOCOL}"
 EOF_ARGO
                 echo "$new_domain" > /etc/s-box/argo.log
                 
@@ -1124,8 +1228,13 @@ EOF_ARGO
                 echo "成功配置并启用固定域名隧道！"
                 local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf 2>/dev/null | head -n 1 | awk -F: '{print $2}')
                 [[ -z "$port_nginx" ]] && port_nginx=8401
-                echo -e "\033[1;33m【重要提示】请前往 Cloudflare Zero Trust 控制台，将该隧道对应的 Public Hostname 服务地址 (Service)"
-                echo -e "设置为: http://127.0.0.1:${port_nginx} (请务必使用 127.0.0.1，以避免 localhost 的 IPv6 解析冲突！)\033[0m"
+                if is_enabled "$USE_NGINX"; then
+                    echo -e "\033[1;33m【重要提示】请前往 Cloudflare Zero Trust 控制台，将该隧道对应的 Public Hostname 服务地址 (Service)"
+                    echo -e "设置为: http://127.0.0.1:${port_nginx} (请务必使用 127.0.0.1，以避免 localhost 的 IPv6 解析冲突！)\033[0m"
+                else
+                    echo -e "\033[1;33m【重要提示】请前往 Cloudflare Zero Trust 控制台，将该隧道对应的 Public Hostname 服务地址 (Service)"
+                    echo -e "设置为: http://127.0.0.1:${ARGO_PORT} (请务必使用 127.0.0.1，以避免 localhost 的 IPv6 解析冲突！)\033[0m"
+                fi
                 ;;
             *)
                 echo "无效选项！"
@@ -1297,7 +1406,10 @@ if [[ "$1" == "cron" ]]; then
     fi
     
     # 检查是否配置了 Argo
-    if [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
+    if [[ -f /etc/s-box/argo.conf ]]; then
+        source /etc/s-box/argo.conf
+    fi
+    if [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]] || (! is_enabled "$USE_NGINX" && [[ -f /etc/s-box/argo.conf ]]); then
         if ! service_is_active argo-tunnel; then
             service_restart argo-tunnel
             
@@ -1364,7 +1476,13 @@ while true; do
         2)
             echo "正在重启服务..."
             service_restart sing-box
-            if [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
+            if [[ -f /etc/s-box/argo.conf ]]; then
+                source /etc/s-box/argo.conf
+            fi
+            if is_enabled "$USE_NGINX" && [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
+                service_restart argo-tunnel
+                update_argo_domain
+            elif [[ -f /etc/s-box/argo.conf ]]; then
                 service_restart argo-tunnel
                 update_argo_domain
             fi
@@ -1422,7 +1540,9 @@ while true; do
                 if crontab -l 2>/dev/null | grep -q "sb cron"; then
                     crontab -l | grep -v "sb cron" | crontab -
                 fi
-                service_restart nginx
+                if is_enabled "$USE_NGINX"; then
+                    service_restart nginx
+                fi
                 echo "清理完成！"
                 exit 0
             fi
@@ -1505,6 +1625,44 @@ if [[ "$menu_choice" == "2" ]]; then
     read -p "7. 是否安装 Argo 隧道穿透 (支持 VMess/Trojan)? [Y/n, 默认Y]: " opt; [[ -n "$opt" ]] && ENABLE_ARGO=$(echo "$opt" | tr 'A-Z' 'a-z')
 fi
 
+# 提供是否使用 Nginx 的选择
+USE_NGINX="y"
+ARGO_TARGET_PROTOCOL=""
+if is_enabled "$ENABLE_ARGO"; then
+    echo "=================================================="
+    echo "          请选择 Argo 隧道的转发方式"
+    echo "=================================================="
+    echo "1. 启用 Nginx 作为反向代理分流 (推荐，支持多协议分流，直接回车)"
+    echo "2. 不启用 Nginx (直接转发到指定协议端口，仿照 argosbx)"
+    echo "=================================================="
+    read -p "请输入选项 [1-2, 默认1]: " nginx_choice
+    if [[ "$nginx_choice" == "2" ]]; then
+        USE_NGINX="n"
+        
+        # 如果同时启用了 VMess 和 Trojan 协议，让用户选择绑定哪一个
+        if is_enabled "$ENABLE_VMESS" && is_enabled "$ENABLE_TROJAN"; then
+            echo "=================================================="
+            echo "    不启用 Nginx 模式下，请选择 Argo 绑定的协议"
+            echo "=================================================="
+            echo "1. VMess-WS (直接回车)"
+            echo "2. Trojan-WS"
+            echo "=================================================="
+            read -p "请输入选项 [1-2, 默认1]: " argo_proto_choice
+            if [[ "$argo_proto_choice" == "2" ]]; then
+                ARGO_TARGET_PROTOCOL="trojan"
+            else
+                ARGO_TARGET_PROTOCOL="vmess"
+            fi
+        elif is_enabled "$ENABLE_VMESS"; then
+            ARGO_TARGET_PROTOCOL="vmess"
+        elif is_enabled "$ENABLE_TROJAN"; then
+            ARGO_TARGET_PROTOCOL="trojan"
+        else
+            ARGO_TARGET_PROTOCOL="none"
+        fi
+    fi
+fi
+
 # 统一判断，空值或 y/yes 都视为启用
 is_enabled() {
     [[ "$1" == "y" || "$1" == "yes" || -z "$1" ]] && return 0 || return 1
@@ -1552,26 +1710,28 @@ case $arch in
         ;;
 esac
 
-# 2. 安装系统依赖和 Nginx
+# 2. 安装系统依赖 and Nginx
 log_info "正在安装必要的系统依赖..."
 if [[ "$release" == "Alpine" ]]; then
     apk update
     apk add --no-cache bash jq openssl curl tar wget procps coreutils iproute2
-    is_enabled "$ENABLE_ARGO" && apk add --no-cache nginx
+    is_enabled "$ENABLE_ARGO" && is_enabled "$USE_NGINX" && apk add --no-cache nginx
 elif [[ "$release" == "CentOS" ]]; then
     yum install -y epel-release
     yum install -y jq openssl curl tar wget psmisc
-    is_enabled "$ENABLE_ARGO" && yum install -y nginx
+    is_enabled "$ENABLE_ARGO" && is_enabled "$USE_NGINX" && yum install -y nginx
 else
     apt-get update -y
     apt-get install -y jq openssl curl tar wget psmisc
-    is_enabled "$ENABLE_ARGO" && apt-get install -y nginx
+    is_enabled "$ENABLE_ARGO" && is_enabled "$USE_NGINX" && apt-get install -y nginx
 fi
 
 # 安装完依赖后重新检测 Nginx 配置目录（Alpine 安装 nginx 后目录才出现）
-NGINX_CONF_DIR="/etc/nginx/conf.d"
-[[ -d "/etc/nginx/http.d" ]] && NGINX_CONF_DIR="/etc/nginx/http.d"
-mkdir -p "${NGINX_CONF_DIR}"
+if is_enabled "$ENABLE_ARGO" && is_enabled "$USE_NGINX"; then
+    NGINX_CONF_DIR="/etc/nginx/conf.d"
+    [[ -d "/etc/nginx/http.d" ]] && NGINX_CONF_DIR="/etc/nginx/http.d"
+    mkdir -p "${NGINX_CONF_DIR}"
+fi
 
 # 3. 创建配置文件目录
 mkdir -p /etc/s-box
@@ -1707,8 +1867,10 @@ if [[ "$port_choice" == "2" ]]; then
     is_enabled "$ENABLE_VMESS" && PORT_VMESS=$(get_custom_port "VMess-WS" 38202)
     is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_custom_port "Trojan-WS-TLS" 48203)
     if is_enabled "$ENABLE_ARGO"; then
-        is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_custom_port "Trojan-WS (Argo内部)" 58204)
-        PORT_NGINX=8401
+        if is_enabled "$USE_NGINX" || [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
+            is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_custom_port "Trojan-WS (Argo内部)" 58204)
+        fi
+        is_enabled "$USE_NGINX" && PORT_NGINX=8401
     fi
     is_enabled "$ENABLE_HY2" && PORT_HY2=$(get_custom_port "Hysteria2" 21092)
     is_enabled "$ENABLE_TUIC" && PORT_TUIC=$(get_custom_port "TUIC v5" 33104)
@@ -1719,8 +1881,10 @@ elif [[ "$port_choice" == "3" ]]; then
     is_enabled "$ENABLE_VMESS" && PORT_VMESS=$(get_random_port_in_range $start_p $end_p)
     is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_random_port_in_range $start_p $end_p)
     if is_enabled "$ENABLE_ARGO"; then
-        is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_random_port_in_range $start_p $end_p)
-        PORT_NGINX=8401
+        if is_enabled "$USE_NGINX" || [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
+            is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_random_port_in_range $start_p $end_p)
+        fi
+        is_enabled "$USE_NGINX" && PORT_NGINX=8401
     fi
     is_enabled "$ENABLE_HY2" && PORT_HY2=$(get_random_port_in_range $start_p $end_p)
     is_enabled "$ENABLE_TUIC" && PORT_TUIC=$(get_random_port_in_range $start_p $end_p)
@@ -1730,12 +1894,27 @@ else
     is_enabled "$ENABLE_VMESS" && PORT_VMESS=$(get_random_port_in_range 20000 60000)
     is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_random_port_in_range 20000 60000)
     if is_enabled "$ENABLE_ARGO"; then
-        is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_random_port_in_range 20000 60000)
-        PORT_NGINX=8401
+        if is_enabled "$USE_NGINX" || [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
+            is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_random_port_in_range 20000 60000)
+        fi
+        is_enabled "$USE_NGINX" && PORT_NGINX=8401
     fi
     is_enabled "$ENABLE_HY2" && PORT_HY2=$(get_random_port_in_range 20000 60000)
     is_enabled "$ENABLE_TUIC" && PORT_TUIC=$(get_random_port_in_range 20000 60000)
     is_enabled "$ENABLE_ANYTLS" && PORT_ANYTLS=$(get_random_port_in_range 20000 60000)
+fi
+
+ARGO_PORT=""
+if is_enabled "$ENABLE_ARGO"; then
+    if is_enabled "$USE_NGINX"; then
+        ARGO_PORT=$PORT_NGINX
+    else
+        if [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]]; then
+            ARGO_PORT=$PORT_VMESS
+        elif [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
+            ARGO_PORT=$PORT_TROJAN_WS
+        fi
+    fi
 fi
 
 # 获取服务器公网 IP
@@ -1822,8 +2001,8 @@ if is_enabled "$ENABLE_TROJAN"; then
     }')
 fi
 
-# 如果启用了 Argo 并且启用了 Trojan，则为 Argo 创建无 TLS 的 Trojan 端口
-if is_enabled "$ENABLE_ARGO" && is_enabled "$ENABLE_TROJAN"; then
+# 如果启用了 Argo，且启用了 Trojan，并且（启用了 Nginx 或 Argo 目标协议为 Trojan），则为 Argo 创建无 TLS 的 Trojan 端口
+if is_enabled "$ENABLE_ARGO" && is_enabled "$ENABLE_TROJAN" && { is_enabled "$USE_NGINX" || [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; }; then
     inbounds+=('{
       "type": "trojan",
       "tag": "trojan-ws-in",
@@ -2150,6 +2329,9 @@ EOF_ARGO
 ARGO_MODE="temp"
 ARGO_TOKEN=""
 ARGO_DOMAIN="${ARGO_DOMAIN}"
+USE_NGINX="${USE_NGINX}"
+ARGO_PORT="${ARGO_PORT}"
+ARGO_TARGET_PROTOCOL="${ARGO_TARGET_PROTOCOL}"
 EOF_ARGO
     fi
 fi
@@ -2238,8 +2420,9 @@ if is_enabled "$ENABLE_ARGO"; then
     fi
     echo "" >> /etc/s-box/info.log
 
-    if is_enabled "$ENABLE_VMESS"; then
-        VMESS_ARGO_JSON=$(cat <<EOF
+    if is_enabled "$USE_NGINX"; then
+        if is_enabled "$ENABLE_VMESS"; then
+            VMESS_ARGO_JSON=$(cat <<EOF
 {
   "v": "2",
   "ps": "SB-VMess-Argo-80",
@@ -2257,9 +2440,9 @@ if is_enabled "$ENABLE_ARGO"; then
 }
 EOF
 )
-        VMESS_ARGO_80_LINK="vmess://$(echo -n "$VMESS_ARGO_JSON" | base64 -w 0)"
+            VMESS_ARGO_80_LINK="vmess://$(echo -n "$VMESS_ARGO_JSON" | base64 -w 0)"
 
-        VMESS_ARGO_TLS_JSON=$(cat <<EOF
+            VMESS_ARGO_TLS_JSON=$(cat <<EOF
 {
   "v": "2",
   "ps": "SB-VMess-Argo-443",
@@ -2277,26 +2460,87 @@ EOF
 }
 EOF
 )
-        VMESS_ARGO_443_LINK="vmess://$(echo -n "$VMESS_ARGO_TLS_JSON" | base64 -w 0)"
+            VMESS_ARGO_443_LINK="vmess://$(echo -n "$VMESS_ARGO_TLS_JSON" | base64 -w 0)"
 
-        echo "1. VMess Argo (80端口):" >> /etc/s-box/info.log
-        echo "${VMESS_ARGO_80_LINK}" >> /etc/s-box/info.log
-        echo "" >> /etc/s-box/info.log
-        echo "2. VMess Argo (443端口/TLS):" >> /etc/s-box/info.log
-        echo "${VMESS_ARGO_443_LINK}" >> /etc/s-box/info.log
-        echo "" >> /etc/s-box/info.log
-    fi
+            echo "1. VMess Argo (80端口):" >> /etc/s-box/info.log
+            echo "${VMESS_ARGO_80_LINK}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+            echo "2. VMess Argo (443端口/TLS):" >> /etc/s-box/info.log
+            echo "${VMESS_ARGO_443_LINK}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+        fi
 
-    if is_enabled "$ENABLE_TROJAN"; then
-        TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-80"
-        TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_DOMAIN}&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-443"
+        if is_enabled "$ENABLE_TROJAN"; then
+            TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-80"
+            TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_DOMAIN}&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-443"
 
-        echo "3. Trojan Argo (80端口):" >> /etc/s-box/info.log
-        echo "${TROJAN_ARGO_80_LINK}" >> /etc/s-box/info.log
-        echo "" >> /etc/s-box/info.log
-        echo "4. Trojan Argo (443端口/TLS):" >> /etc/s-box/info.log
-        echo "${TROJAN_ARGO_443_LINK}" >> /etc/s-box/info.log
-        echo "" >> /etc/s-box/info.log
+            echo "3. Trojan Argo (80端口):" >> /etc/s-box/info.log
+            echo "${TROJAN_ARGO_80_LINK}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+            echo "4. Trojan Argo (443端口/TLS):" >> /etc/s-box/info.log
+            echo "${TROJAN_ARGO_443_LINK}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+        fi
+    else
+        # 免 Nginx 模式，根据绑定的目标协议生成相应的链接
+        if [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]] && is_enabled "$ENABLE_VMESS"; then
+            VMESS_ARGO_JSON=$(cat <<EOF
+{
+  "v": "2",
+  "ps": "SB-VMess-Argo-80",
+  "add": "cdn.2020111.xyz",
+  "port": "80",
+  "id": "${UUID}",
+  "aid": "0",
+  "scy": "auto",
+  "net": "ws",
+  "type": "none",
+  "host": "${ARGO_DOMAIN}",
+  "path": "/${UUID}-vm",
+  "tls": "none",
+  "sni": ""
+}
+EOF
+)
+            VMESS_ARGO_80_LINK="vmess://$(echo -n "$VMESS_ARGO_JSON" | base64 -w 0)"
+
+            VMESS_ARGO_TLS_JSON=$(cat <<EOF
+{
+  "v": "2",
+  "ps": "SB-VMess-Argo-443",
+  "add": "cdn.2020111.xyz",
+  "port": "443",
+  "id": "${UUID}",
+  "aid": "0",
+  "scy": "auto",
+  "net": "ws",
+  "type": "none",
+  "host": "${ARGO_DOMAIN}",
+  "path": "/${UUID}-vm",
+  "tls": "tls",
+  "sni": "${ARGO_DOMAIN}"
+}
+EOF
+)
+            VMESS_ARGO_443_LINK="vmess://$(echo -n "$VMESS_ARGO_TLS_JSON" | base64 -w 0)"
+
+            echo "1. VMess Argo (80端口):" >> /etc/s-box/info.log
+            echo "${VMESS_ARGO_80_LINK}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+            echo "2. VMess Argo (443端口/TLS):" >> /etc/s-box/info.log
+            echo "${VMESS_ARGO_443_LINK}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+        elif [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]] && is_enabled "$ENABLE_TROJAN"; then
+            TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-80"
+            TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_DOMAIN}&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-443"
+
+            echo "1. Trojan Argo (80端口):" >> /etc/s-box/info.log
+            echo "${TROJAN_ARGO_80_LINK}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+            echo "2. Trojan Argo (443端口/TLS):" >> /etc/s-box/info.log
+            echo "${TROJAN_ARGO_443_LINK}" >> /etc/s-box/info.log
+            echo "" >> /etc/s-box/info.log
+        fi
     fi
 fi
 
