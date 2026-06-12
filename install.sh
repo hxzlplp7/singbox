@@ -2689,7 +2689,7 @@ EOF
         fi
     else
         # 免 Nginx 模式，双子域名分别独立生成
-        local argo_idx=1
+        argo_idx=1
         if is_enabled "$ENABLE_VMESS" && [[ -n "$ARGO_VMESS_DOMAIN" ]]; then
             VMESS_ARGO_JSON=$(cat <<EOF
 {
@@ -2798,7 +2798,7 @@ if is_enabled "$ENABLE_ARGO" && [[ "$argo_mode" == "token" ]] && ! is_enabled "$
     echo -e "=======================================================================\033[0m"
     echo ""
 elif is_enabled "$ENABLE_ARGO" && [[ "$argo_mode" == "token" ]] && is_enabled "$USE_NGINX"; then
-    local port_nginx_actual=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf 2>/dev/null | head -n 1 | awk -F: '{print $2}')
+    port_nginx_actual=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf 2>/dev/null | head -n 1 | awk -F: '{print $2}')
     [[ -z "$port_nginx_actual" ]] && port_nginx_actual=8401
     echo ""
     echo -e "\033[1;33m======================================================================="
