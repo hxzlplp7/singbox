@@ -2628,6 +2628,13 @@ EOF
         log_warn "Nginx 未在端口 ${PORT_NGINX} 上监听，请检查 Nginx 配置！"
         nginx -t 2>&1
     fi
+else
+    # 如果没启用 Nginx，为防止原有的 nginx 进程残留运行并占用端口，主动关闭并禁用它
+    if which nginx >/dev/null 2>&1 || command -v nginx >/dev/null 2>&1; then
+        log_info "正在停止可能残留运行的 Nginx 服务..."
+        service_stop nginx
+        service_disable nginx
+    fi
 fi
 
 # 10. 创建守护服务
