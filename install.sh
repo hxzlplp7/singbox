@@ -350,10 +350,15 @@ EOF2
     fi
 
     # Argo
-    if [[ -n "$argo_domain" ]]; then
+    if [[ -n "$argo_domain" ]] || [[ -n "$ARGO_VMESS_DOMAIN" ]] || [[ -n "$ARGO_TROJAN_DOMAIN" ]]; then
         echo "------------------【Argo穿透】--------------------" >> /etc/s-box/info.log
         if [[ "$argo_mode" == "token" ]]; then
-            echo "Argo 固定域名: ${argo_domain}" >> /etc/s-box/info.log
+            if is_enabled "$USE_NGINX"; then
+                echo "Argo 固定域名: ${argo_domain}" >> /etc/s-box/info.log
+            else
+                [[ -n "$ARGO_VMESS_DOMAIN" ]] && echo "VMess Argo 域名: ${ARGO_VMESS_DOMAIN}" >> /etc/s-box/info.log
+                [[ -n "$ARGO_TROJAN_DOMAIN" ]] && echo "Trojan Argo 域名: ${ARGO_TROJAN_DOMAIN}" >> /etc/s-box/info.log
+            fi
         else
             echo "Argo 临时域名: ${argo_domain}" >> /etc/s-box/info.log
         fi
@@ -427,8 +432,9 @@ EOF2
                 echo "" >> /etc/s-box/info.log
             fi
         else
-            # 免 Nginx 模式，根据绑定的目标协议生成相应的链接
-            if [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]] && jq -e '.inbounds[] | select(.tag=="vmess-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+            # 免 Nginx 模式，双子域名分别独立生成
+            local argo_idx=1
+            if jq -e '.inbounds[] | select(.tag=="vmess-in")' /etc/s-box/sb.json >/dev/null 2>&1 && [[ -n "$ARGO_VMESS_DOMAIN" ]]; then
                 local uuid_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .users[0].uuid' /etc/s-box/sb.json)
                 local path_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .transport.path' /etc/s-box/sb.json)
                 local vmess_argo_json=$(cat <<EOF2
@@ -442,7 +448,7 @@ EOF2
   "scy": "auto",
   "net": "ws",
   "type": "none",
-  "host": "${argo_domain}",
+  "host": "${ARGO_VMESS_DOMAIN}",
   "path": "${path_vmess}",
   "tls": "none",
   "sni": ""
@@ -462,35 +468,41 @@ EOF2
   "scy": "auto",
   "net": "ws",
   "type": "none",
-  "host": "${argo_domain}",
+  "host": "${ARGO_VMESS_DOMAIN}",
   "path": "${path_vmess}",
   "tls": "tls",
-  "sni": "${argo_domain}"
+  "sni": "${ARGO_VMESS_DOMAIN}"
 }
 EOF2
 )
                 local vmess_argo_443_link="vmess://$(echo -n "$vmess_argo_tls_json" | base64 -w 0)"
 
-                echo "1. VMess Argo (80端口):" >> /etc/s-box/info.log
+                echo "${argo_idx}. VMess Argo (80端口):" >> /etc/s-box/info.log
                 echo "${vmess_argo_80_link}" >> /etc/s-box/info.log
                 echo "" >> /etc/s-box/info.log
-                echo "2. VMess Argo (443端口/TLS):" >> /etc/s-box/info.log
+                ((argo_idx++))
+                echo "${argo_idx}. VMess Argo (443端口/TLS):" >> /etc/s-box/info.log
                 echo "${vmess_argo_443_link}" >> /etc/s-box/info.log
                 echo "" >> /etc/s-box/info.log
-            elif [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]] && jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+                ((argo_idx++))
+            fi
+
+            if jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1 && [[ -n "$ARGO_TROJAN_DOMAIN" ]]; then
                 local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .users[0].password' /etc/s-box/sb.json)
                 local path_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
                 local path_trojan_ws_encoded=$(echo -n "$path_trojan_ws" | jq -sRr @uri)
                 
-                local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-80"
-                local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${argo_domain}&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-443"
+                local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-80"
+                local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_TROJAN_DOMAIN}&type=ws&path=${path_trojan_ws_encoded}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-443"
 
-                echo "1. Trojan Argo (80端口):" >> /etc/s-box/info.log
+                echo "${argo_idx}. Trojan Argo (80端口):" >> /etc/s-box/info.log
                 echo "${trojan_argo_80_link}" >> /etc/s-box/info.log
                 echo "" >> /etc/s-box/info.log
-                echo "2. Trojan Argo (443端口/TLS):" >> /etc/s-box/info.log
+                ((argo_idx++))
+                echo "${argo_idx}. Trojan Argo (443端口/TLS):" >> /etc/s-box/info.log
                 echo "${trojan_argo_443_link}" >> /etc/s-box/info.log
                 echo "" >> /etc/s-box/info.log
+                ((argo_idx++))
             fi
         fi
     fi
@@ -1051,6 +1063,8 @@ modify_argo() {
         local argo_mode="temp"
         local argo_token=""
         local argo_domain=""
+        local ARGO_VMESS_DOMAIN=""
+        local ARGO_TROJAN_DOMAIN=""
         if [[ -f /etc/s-box/argo.conf ]]; then
             source /etc/s-box/argo.conf
             argo_mode=$ARGO_MODE
@@ -1078,7 +1092,12 @@ modify_argo() {
         echo "--------------------------------------------------"
         if [[ "$argo_mode" == "token" ]]; then
             echo "当前模式: 固定域名隧道 (Token 模式)"
-            echo "自备域名: $argo_domain"
+            if is_enabled "$USE_NGINX"; then
+                echo "自备域名: $argo_domain"
+            else
+                [[ -n "$ARGO_VMESS_DOMAIN" ]] && echo "VMess 子域名: $ARGO_VMESS_DOMAIN"
+                [[ -n "$ARGO_TROJAN_DOMAIN" ]] && echo "Trojan 子域名: $ARGO_TROJAN_DOMAIN"
+            fi
             echo "Token值 : ${argo_token:0:15}... (已隐藏后续字符)"
         else
             echo "当前模式: 临时域名隧道 (TryCloudflare 模式)"
@@ -1150,9 +1169,10 @@ EOF_SYSTEMD
 ARGO_MODE="temp"
 ARGO_TOKEN=""
 ARGO_DOMAIN=""
+ARGO_VMESS_DOMAIN=""
+ARGO_TROJAN_DOMAIN=""
 USE_NGINX="${USE_NGINX}"
 ARGO_PORT="${ARGO_PORT}"
-ARGO_TARGET_PROTOCOL="${ARGO_TARGET_PROTOCOL}"
 EOF_ARGO
                 
                 service_restart argo-tunnel
@@ -1166,16 +1186,52 @@ EOF_ARGO
                     echo "错误：Token 不能为空！"
                     continue
                 fi
-                read -p "请输入您在 Cloudflare 上为该隧道绑定的自定义域名 (如: argo.example.com): " new_domain
-                if [[ -z "$new_domain" ]]; then
-                    echo "错误：自定义域名不能为空！"
-                    continue
+
+                # 询问转发方式
+                echo "=================================================="
+                echo "          请选择 Argo 隧道的转发方式"
+                echo "=================================================="
+                echo "1. 启用 Nginx 作为反向代理分流 (推荐，支持多协议单域名分流，直接回车)"
+                echo "2. 不启用 Nginx (多子域名多端口直连，VMess=8401, Trojan=8402)"
+                echo "=================================================="
+                read -p "请输入选项 [1-2, 默认1]: " nginx_choice
+                local new_use_nginx="y"
+                if [[ "$nginx_choice" == "2" ]]; then
+                    new_use_nginx="n"
+                fi
+
+                local new_domain=""
+                local new_vmess_domain=""
+                local new_trojan_domain=""
+
+                if is_enabled "$new_use_nginx"; then
+                    read -p "请输入您在 Cloudflare 上为该隧道绑定的自定义域名 (如: argo.example.com): " new_domain
+                    if [[ -z "$new_domain" ]]; then
+                        echo "错误：自定义域名不能为空！"
+                        continue
+                    fi
+                else
+                    # 检查已安装什么协议以询问对应域名
+                    if jq -e '.inbounds[] | select(.tag=="vmess-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+                        read -p "请输入 VMess 节点对应的自定义子域名 (如: vmess.example.com): " new_vmess_domain
+                        if [[ -z "$new_vmess_domain" ]]; then
+                            echo "错误：VMess 子域名不能为空！"
+                            continue
+                        fi
+                    fi
+                    if jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
+                        read -p "请输入 Trojan 节点对应的自定义子域名 (如: trojan.example.com): " new_trojan_domain
+                        if [[ -z "$new_trojan_domain" ]]; then
+                            echo "错误：Trojan 子域名不能为空！"
+                            continue
+                        fi
+                    fi
                 fi
                 
                 echo "正在配置固定域名隧道..."
                 
                 local argo_depend="net sing-box"
-                if is_enabled "$USE_NGINX"; then
+                if is_enabled "$new_use_nginx"; then
                     argo_depend="net sing-box nginx"
                 fi
                 
@@ -1217,23 +1273,39 @@ EOF_SYSTEMD
 ARGO_MODE="token"
 ARGO_TOKEN="${new_token}"
 ARGO_DOMAIN="${new_domain}"
-USE_NGINX="${USE_NGINX}"
+ARGO_VMESS_DOMAIN="${new_vmess_domain}"
+ARGO_TROJAN_DOMAIN="${new_trojan_domain}"
+USE_NGINX="${new_use_nginx}"
 ARGO_PORT="${ARGO_PORT}"
-ARGO_TARGET_PROTOCOL="${ARGO_TARGET_PROTOCOL}"
 EOF_ARGO
-                echo "$new_domain" > /etc/s-box/argo.log
+
+                if ! is_enabled "$new_use_nginx"; then
+                    echo "${new_vmess_domain:-$new_trojan_domain}" > /etc/s-box/argo.log
+                else
+                    echo "$new_domain" > /etc/s-box/argo.log
+                fi
                 
                 service_restart argo-tunnel
                 regenerate_info_log
                 echo "成功配置并启用固定域名隧道！"
                 local port_nginx=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf 2>/dev/null | head -n 1 | awk -F: '{print $2}')
                 [[ -z "$port_nginx" ]] && port_nginx=8401
-                if is_enabled "$USE_NGINX"; then
+                if is_enabled "$new_use_nginx"; then
                     echo -e "\033[1;33m【重要提示】请前往 Cloudflare Zero Trust 控制台，将该隧道对应的 Public Hostname 服务地址 (Service)"
                     echo -e "设置为: http://127.0.0.1:${port_nginx} (请务必使用 127.0.0.1，以避免 localhost 的 IPv6 解析冲突！)\033[0m"
                 else
-                    echo -e "\033[1;33m【重要提示】请前往 Cloudflare Zero Trust 控制台，将该隧道对应的 Public Hostname 服务地址 (Service)"
-                    echo -e "设置为: http://127.0.0.1:${ARGO_PORT} (请务必使用 127.0.0.1，以避免 localhost 的 IPv6 解析冲突！)\033[0m"
+                    echo -e "\033[1;33m【重要提示】请前往 Cloudflare Zero Trust 控制台，分别配置子域名对应的 Public Hostname 服务地址 (Service)："
+                    if [[ -n "$new_vmess_domain" ]]; then
+                        local port_vmess=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .listen_port' /etc/s-box/sb.json 2>/dev/null)
+                        [[ -z "$port_vmess" ]] && port_vmess=8401
+                        echo -e "  → 子域名: ${new_vmess_domain} → http://127.0.0.1:${port_vmess}"
+                    fi
+                    if [[ -n "$new_trojan_domain" ]]; then
+                        local port_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .listen_port' /etc/s-box/sb.json 2>/dev/null)
+                        [[ -z "$port_trojan_ws" ]] && port_trojan_ws=8402
+                        echo -e "  → 子域名: ${new_trojan_domain} → http://127.0.0.1:${port_trojan_ws}"
+                    fi
+                    echo -e "  (请务必使用 127.0.0.1，以避免 localhost 的 IPv6 解析冲突！)\033[0m"
                 fi
                 ;;
             *)
@@ -1649,57 +1721,21 @@ is_enabled() {
     [[ "$1" == "y" || "$1" == "yes" || -z "$1" ]] && return 0 || return 1
 }
 
-# 提供是否使用 Nginx 的选择
+# 提供 Argo 配置的交互选择
 USE_NGINX="y"
-ARGO_TARGET_PROTOCOL=""
-if is_enabled "$ENABLE_ARGO"; then
-    echo "=================================================="
-    echo "          请选择 Argo 隧道的转发方式"
-    echo "=================================================="
-    echo "1. 启用 Nginx 作为反向代理分流 (推荐，支持多协议分流，直接回车)"
-    echo "2. 不启用 Nginx (直接转发到指定协议端口，仿照 argosbx)"
-    echo "=================================================="
-    read -p "请输入选项 [1-2, 默认1]: " nginx_choice
-    if [[ "$nginx_choice" == "2" ]]; then
-        USE_NGINX="n"
-        
-        # 如果同时启用了 VMess 和 Trojan 协议，让用户选择绑定哪一个
-        if is_enabled "$ENABLE_VMESS" && is_enabled "$ENABLE_TROJAN"; then
-            echo "=================================================="
-            echo "    不启用 Nginx 模式下，请选择 Argo 绑定的协议"
-            echo "=================================================="
-            echo "1. VMess-WS (直接回车)"
-            echo "2. Trojan-WS"
-            echo "=================================================="
-            read -p "请输入选项 [1-2, 默认1]: " argo_proto_choice
-            if [[ "$argo_proto_choice" == "2" ]]; then
-                ARGO_TARGET_PROTOCOL="trojan"
-            else
-                ARGO_TARGET_PROTOCOL="vmess"
-            fi
-        elif is_enabled "$ENABLE_VMESS"; then
-            ARGO_TARGET_PROTOCOL="vmess"
-        elif is_enabled "$ENABLE_TROJAN"; then
-            ARGO_TARGET_PROTOCOL="trojan"
-        else
-            ARGO_TARGET_PROTOCOL="none"
-        fi
-    fi
+ARGO_MODE="temp"
+ARGO_TOKEN=""
+ARGO_DOMAIN=""
+ARGO_VMESS_DOMAIN=""
+ARGO_TROJAN_DOMAIN=""
 
-    # 选择 Argo 运行模式
-    ARGO_MODE="temp"
-    ARGO_TOKEN=""
-    ARGO_DOMAIN=""
-    
+if is_enabled "$ENABLE_ARGO"; then
     # 尝试从已有配置自适应继承
     if [[ -f /etc/s-box/argo.conf ]]; then
         source /etc/s-box/argo.conf
-        ARGO_MODE=$ARGO_MODE
-        ARGO_TOKEN=$ARGO_TOKEN
-        ARGO_DOMAIN=$ARGO_DOMAIN
     fi
     
-    # 如果原本就是 token 模式，或者手动选择，则走对应逻辑
+    # 询问 Argo 隧道的运行模式
     if [[ "$ARGO_MODE" != "token" ]]; then
         echo "=================================================="
         echo "          请选择 Argo 隧道的运行模式"
@@ -1710,6 +1746,14 @@ if is_enabled "$ENABLE_ARGO"; then
         read -p "请输入选项 [1-2, 默认1]: " argo_mode_choice
         if [[ "$argo_mode_choice" == "2" ]]; then
             ARGO_MODE="token"
+        else
+            ARGO_MODE="temp"
+        fi
+    fi
+
+    if [[ "$ARGO_MODE" == "token" ]]; then
+        # 输入 Token
+        if [[ -z "$ARGO_TOKEN" ]]; then
             while true; do
                 read -p "请输入您的 Cloudflare Tunnel Token: " ARGO_TOKEN
                 if [[ -n "$ARGO_TOKEN" ]]; then
@@ -1717,6 +1761,24 @@ if is_enabled "$ENABLE_ARGO"; then
                 fi
                 log_err "Token 不能为空，请重新输入！"
             done
+        fi
+
+        # 选择转发方式
+        echo "=================================================="
+        echo "          请选择 Argo 隧道的转发方式"
+        echo "=================================================="
+        echo "1. 启用 Nginx 作为反向代理分流 (推荐，支持多协议单域名分流，直接回车)"
+        echo "2. 不启用 Nginx (多子域名多端口直连，VMess=8401, Trojan=8402)"
+        echo "=================================================="
+        read -p "请输入选项 [1-2, 默认1]: " nginx_choice
+        if [[ "$nginx_choice" == "2" ]]; then
+            USE_NGINX="n"
+        else
+            USE_NGINX="y"
+        fi
+
+        if is_enabled "$USE_NGINX"; then
+            # 单域名模式
             while true; do
                 read -p "请输入您在 Cloudflare 上为该隧道绑定的自定义域名 (如: argo.example.com): " ARGO_DOMAIN
                 if [[ -n "$ARGO_DOMAIN" ]]; then
@@ -1724,7 +1786,30 @@ if is_enabled "$ENABLE_ARGO"; then
                 fi
                 log_err "自定义域名不能为空，请重新输入！"
             done
+        else
+            # 免 Nginx 多子域名模式
+            if is_enabled "$ENABLE_VMESS"; then
+                while true; do
+                    read -p "请输入 VMess 节点对应的自定义子域名 (如: vmess.example.com): " ARGO_VMESS_DOMAIN
+                    if [[ -n "$ARGO_VMESS_DOMAIN" ]]; then
+                        break
+                    fi
+                    log_err "VMess 子域名不能为空，请重新输入！"
+                done
+            fi
+            if is_enabled "$ENABLE_TROJAN"; then
+                while true; do
+                    read -p "请输入 Trojan 节点对应的自定义子域名 (如: trojan.example.com): " ARGO_TROJAN_DOMAIN
+                    if [[ -n "$ARGO_TROJAN_DOMAIN" ]]; then
+                        break
+                    fi
+                    log_err "Trojan 子域名不能为空，请重新输入！"
+                done
+            fi
         fi
+    else
+        # 临时域名模式强制启用 Nginx
+        USE_NGINX="y"
     fi
 fi
 
@@ -1925,7 +2010,7 @@ read -p "请输入选项 [1-3, 默认1]: " port_choice
 if [[ "$port_choice" == "2" ]]; then
     is_enabled "$ENABLE_VLESS" && PORT_VLESS=$(get_custom_port "VLESS-Reality" 28201)
     if is_enabled "$ENABLE_VMESS"; then
-        if is_enabled "$ENABLE_ARGO" && ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]]; then
+        if is_enabled "$ENABLE_ARGO" && ! is_enabled "$USE_NGINX"; then
             PORT_VMESS=8401
             log_info "Argo 免 Nginx 穿透 VMess-WS，本地端口已自动固定为 8401。"
         else
@@ -1934,14 +2019,17 @@ if [[ "$port_choice" == "2" ]]; then
     fi
     is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_custom_port "Trojan-WS-TLS" 48203)
     if is_enabled "$ENABLE_ARGO"; then
-        if is_enabled "$USE_NGINX" || [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
-            if is_enabled "$ENABLE_TROJAN"; then
-                if ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
+        if is_enabled "$ENABLE_TROJAN"; then
+            if ! is_enabled "$USE_NGINX"; then
+                if is_enabled "$ENABLE_VMESS"; then
+                    PORT_TROJAN_WS=8402
+                    log_info "Argo 免 Nginx 穿透 Trojan-WS，本地端口已自动固定为 8402。"
+                else
                     PORT_TROJAN_WS=8401
                     log_info "Argo 免 Nginx 穿透 Trojan-WS，本地端口已自动固定为 8401。"
-                else
-                    PORT_TROJAN_WS=$(get_custom_port "Trojan-WS (Argo内部)" 58204)
                 fi
+            else
+                PORT_TROJAN_WS=$(get_custom_port "Trojan-WS (Argo内部)" 58204)
             fi
         fi
         is_enabled "$USE_NGINX" && PORT_NGINX=8401
@@ -1953,7 +2041,7 @@ elif [[ "$port_choice" == "3" ]]; then
     read start_p end_p <<< $(get_port_range)
     is_enabled "$ENABLE_VLESS" && PORT_VLESS=$(get_random_port_in_range $start_p $end_p)
     if is_enabled "$ENABLE_VMESS"; then
-        if is_enabled "$ENABLE_ARGO" && ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]]; then
+        if is_enabled "$ENABLE_ARGO" && ! is_enabled "$USE_NGINX"; then
             PORT_VMESS=8401
         else
             PORT_VMESS=$(get_random_port_in_range $start_p $end_p)
@@ -1961,13 +2049,15 @@ elif [[ "$port_choice" == "3" ]]; then
     fi
     is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_random_port_in_range $start_p $end_p)
     if is_enabled "$ENABLE_ARGO"; then
-        if is_enabled "$USE_NGINX" || [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
-            if is_enabled "$ENABLE_TROJAN"; then
-                if ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
-                    PORT_TROJAN_WS=8401
+        if is_enabled "$ENABLE_TROJAN"; then
+            if ! is_enabled "$USE_NGINX"; then
+                if is_enabled "$ENABLE_VMESS"; then
+                    PORT_TROJAN_WS=8402
                 else
-                    PORT_TROJAN_WS=$(get_random_port_in_range $start_p $end_p)
+                    PORT_TROJAN_WS=8401
                 fi
+            else
+                PORT_TROJAN_WS=$(get_random_port_in_range $start_p $end_p)
             fi
         fi
         is_enabled "$USE_NGINX" && PORT_NGINX=8401
@@ -1978,7 +2068,7 @@ elif [[ "$port_choice" == "3" ]]; then
 else
     is_enabled "$ENABLE_VLESS" && PORT_VLESS=$(get_random_port_in_range 20000 60000)
     if is_enabled "$ENABLE_VMESS"; then
-        if is_enabled "$ENABLE_ARGO" && ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]]; then
+        if is_enabled "$ENABLE_ARGO" && ! is_enabled "$USE_NGINX"; then
             PORT_VMESS=8401
         else
             PORT_VMESS=$(get_random_port_in_range 20000 60000)
@@ -1986,13 +2076,15 @@ else
     fi
     is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_random_port_in_range 20000 60000)
     if is_enabled "$ENABLE_ARGO"; then
-        if is_enabled "$USE_NGINX" || [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
-            if is_enabled "$ENABLE_TROJAN"; then
-                if ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
-                    PORT_TROJAN_WS=8401
+        if is_enabled "$ENABLE_TROJAN"; then
+            if ! is_enabled "$USE_NGINX"; then
+                if is_enabled "$ENABLE_VMESS"; then
+                    PORT_TROJAN_WS=8402
                 else
-                    PORT_TROJAN_WS=$(get_random_port_in_range 20000 60000)
+                    PORT_TROJAN_WS=8401
                 fi
+            else
+                PORT_TROJAN_WS=$(get_random_port_in_range 20000 60000)
             fi
         fi
         is_enabled "$USE_NGINX" && PORT_NGINX=8401
@@ -2095,8 +2187,8 @@ if is_enabled "$ENABLE_TROJAN"; then
     }')
 fi
 
-# 如果启用了 Argo，且启用了 Trojan，并且（启用了 Nginx 或 Argo 目标协议为 Trojan），则为 Argo 创建无 TLS 的 Trojan 端口
-if is_enabled "$ENABLE_ARGO" && is_enabled "$ENABLE_TROJAN" && { is_enabled "$USE_NGINX" || [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; }; then
+# 如果启用了 Argo，且启用了 Trojan，则为 Argo 创建无 TLS 的 Trojan 端口
+if is_enabled "$ENABLE_ARGO" && is_enabled "$ENABLE_TROJAN"; then
     inbounds+=('{
       "type": "trojan",
       "tag": "trojan-ws-in",
@@ -2391,15 +2483,20 @@ EOF
     fi
 
     if [[ "$argo_mode" == "token" ]]; then
-        ARGO_DOMAIN="${argo_domain}"
-        echo "$ARGO_DOMAIN" > /etc/s-box/argo.log
+        ARGO_DOMAIN="${argo_domain:-$ARGO_DOMAIN}"
+        if ! is_enabled "$USE_NGINX"; then
+            echo "${ARGO_VMESS_DOMAIN:-$ARGO_TROJAN_DOMAIN}" > /etc/s-box/argo.log
+        else
+            echo "$ARGO_DOMAIN" > /etc/s-box/argo.log
+        fi
         cat > /etc/s-box/argo.conf <<EOF_ARGO
 ARGO_MODE="token"
 ARGO_TOKEN="${argo_token}"
 ARGO_DOMAIN="${ARGO_DOMAIN}"
+ARGO_VMESS_DOMAIN="${ARGO_VMESS_DOMAIN}"
+ARGO_TROJAN_DOMAIN="${ARGO_TROJAN_DOMAIN}"
 USE_NGINX="${USE_NGINX}"
 ARGO_PORT="${ARGO_PORT}"
-ARGO_TARGET_PROTOCOL="${ARGO_TARGET_PROTOCOL}"
 EOF_ARGO
     else
         log_info "正在等待 Argo 隧道上线，获取节点临时域名..."
@@ -2432,9 +2529,10 @@ EOF_ARGO
 ARGO_MODE="temp"
 ARGO_TOKEN=""
 ARGO_DOMAIN="${ARGO_DOMAIN}"
+ARGO_VMESS_DOMAIN=""
+ARGO_TROJAN_DOMAIN=""
 USE_NGINX="${USE_NGINX}"
 ARGO_PORT="${ARGO_PORT}"
-ARGO_TARGET_PROTOCOL="${ARGO_TARGET_PROTOCOL}"
 EOF_ARGO
     fi
 fi
@@ -2517,7 +2615,12 @@ fi
 if is_enabled "$ENABLE_ARGO"; then
     echo "------------------【Argo穿透】--------------------" >> /etc/s-box/info.log
     if [[ "$argo_mode" == "token" ]]; then
-        echo "Argo 固定域名: ${ARGO_DOMAIN}" >> /etc/s-box/info.log
+        if is_enabled "$USE_NGINX"; then
+            echo "Argo 固定域名: ${ARGO_DOMAIN}" >> /etc/s-box/info.log
+        else
+            [[ -n "$ARGO_VMESS_DOMAIN" ]] && echo "VMess Argo 域名: ${ARGO_VMESS_DOMAIN}" >> /etc/s-box/info.log
+            [[ -n "$ARGO_TROJAN_DOMAIN" ]] && echo "Trojan Argo 域名: ${ARGO_TROJAN_DOMAIN}" >> /etc/s-box/info.log
+        fi
     else
         echo "Argo 临时域名: ${ARGO_DOMAIN}" >> /etc/s-box/info.log
     fi
@@ -2585,8 +2688,9 @@ EOF
             echo "" >> /etc/s-box/info.log
         fi
     else
-        # 免 Nginx 模式，根据绑定的目标协议生成相应的链接
-        if [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]] && is_enabled "$ENABLE_VMESS"; then
+        # 免 Nginx 模式，双子域名分别独立生成
+        local argo_idx=1
+        if is_enabled "$ENABLE_VMESS" && [[ -n "$ARGO_VMESS_DOMAIN" ]]; then
             VMESS_ARGO_JSON=$(cat <<EOF
 {
   "v": "2",
@@ -2598,7 +2702,7 @@ EOF
   "scy": "auto",
   "net": "ws",
   "type": "none",
-  "host": "${ARGO_DOMAIN}",
+  "host": "${ARGO_VMESS_DOMAIN}",
   "path": "/${UUID}-vm",
   "tls": "none",
   "sni": ""
@@ -2618,31 +2722,37 @@ EOF
   "scy": "auto",
   "net": "ws",
   "type": "none",
-  "host": "${ARGO_DOMAIN}",
+  "host": "${ARGO_VMESS_DOMAIN}",
   "path": "/${UUID}-vm",
   "tls": "tls",
-  "sni": "${ARGO_DOMAIN}"
+  "sni": "${ARGO_VMESS_DOMAIN}"
 }
 EOF
 )
             VMESS_ARGO_443_LINK="vmess://$(echo -n "$VMESS_ARGO_TLS_JSON" | base64 -w 0)"
 
-            echo "1. VMess Argo (80端口):" >> /etc/s-box/info.log
+            echo "${argo_idx}. VMess Argo (80端口):" >> /etc/s-box/info.log
             echo "${VMESS_ARGO_80_LINK}" >> /etc/s-box/info.log
             echo "" >> /etc/s-box/info.log
-            echo "2. VMess Argo (443端口/TLS):" >> /etc/s-box/info.log
+            ((argo_idx++))
+            echo "${argo_idx}. VMess Argo (443端口/TLS):" >> /etc/s-box/info.log
             echo "${VMESS_ARGO_443_LINK}" >> /etc/s-box/info.log
             echo "" >> /etc/s-box/info.log
-        elif [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]] && is_enabled "$ENABLE_TROJAN"; then
-            TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-80"
-            TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_DOMAIN}&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-443"
+            ((argo_idx++))
+        fi
 
-            echo "1. Trojan Argo (80端口):" >> /etc/s-box/info.log
+        if is_enabled "$ENABLE_TROJAN" && [[ -n "$ARGO_TROJAN_DOMAIN" ]]; then
+            TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-80"
+            TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_TROJAN_DOMAIN}&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-443"
+
+            echo "${argo_idx}. Trojan Argo (80端口):" >> /etc/s-box/info.log
             echo "${TROJAN_ARGO_80_LINK}" >> /etc/s-box/info.log
             echo "" >> /etc/s-box/info.log
-            echo "2. Trojan Argo (443端口/TLS):" >> /etc/s-box/info.log
+            ((argo_idx++))
+            echo "${argo_idx}. Trojan Argo (443端口/TLS):" >> /etc/s-box/info.log
             echo "${TROJAN_ARGO_443_LINK}" >> /etc/s-box/info.log
             echo "" >> /etc/s-box/info.log
+            ((argo_idx++))
         fi
     fi
 fi
@@ -2671,5 +2781,34 @@ fi
 
 # 打印信息到终端
 cat /etc/s-box/info.log
+
+# 提示固定隧道用户前往控制台做映射配置
+if is_enabled "$ENABLE_ARGO" && [[ "$argo_mode" == "token" ]] && ! is_enabled "$USE_NGINX"; then
+    echo ""
+    echo -e "\033[1;33m======================================================================="
+    echo "【重要提示】您已启用免 Nginx 固定隧道模式，请登录 Cloudflare Zero Trust 控制台："
+    echo "  1. 找到对应的 Argo Tunnel，进入 Public Hostname 页面"
+    if is_enabled "$ENABLE_VMESS" && [[ -n "$ARGO_VMESS_DOMAIN" ]]; then
+        echo "  2. 添加域名: ${ARGO_VMESS_DOMAIN} → Service: http://127.0.0.1:${PORT_VMESS:-8401}"
+    fi
+    if is_enabled "$ENABLE_TROJAN" && [[ -n "$ARGO_TROJAN_DOMAIN" ]]; then
+        echo "  3. 添加域名: ${ARGO_TROJAN_DOMAIN} → Service: http://127.0.0.1:${PORT_TROJAN_WS:-8402}"
+    fi
+    echo "  (注意：Service 地址请使用 127.0.0.1 而非 localhost，避免 IPv6 双栈环回解析问题)"
+    echo -e "=======================================================================\033[0m"
+    echo ""
+elif is_enabled "$ENABLE_ARGO" && [[ "$argo_mode" == "token" ]] && is_enabled "$USE_NGINX"; then
+    local port_nginx_actual=$(grep -oE "listen 127.0.0.1:[0-9]+" ${NGINX_CONF_DIR}/singbox-argo.conf 2>/dev/null | head -n 1 | awk -F: '{print $2}')
+    [[ -z "$port_nginx_actual" ]] && port_nginx_actual=8401
+    echo ""
+    echo -e "\033[1;33m======================================================================="
+    echo "【重要提示】您已启用 Nginx 固定隧道模式，请登录 Cloudflare Zero Trust 控制台："
+    echo "  1. 找到对应的 Argo Tunnel，进入 Public Hostname 页面"
+    echo "  2. 添加域名: ${ARGO_DOMAIN} → Service: http://127.0.0.1:${port_nginx_actual}"
+    echo "  (注意：Service 地址请使用 127.0.0.1 而非 localhost，避免 IPv6 双栈环回解析问题)"
+    echo -e "=======================================================================\033[0m"
+    echo ""
+fi
+
 log_info "所有已选节点的链接已保存至 /etc/s-box/info.log"
 log_info "快捷管理工具已安装。今后你可以直接在终端输入【 sb 】来管理你的服务与节点配置。"
