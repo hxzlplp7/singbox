@@ -12,6 +12,23 @@ export LANG=en_US.UTF-8
 # 覆写 jq 确保所有提取出来的 JSON 字段都不带 Windows 的 \r 回车符
 jq() {
     command jq "$@" | tr -d '\r'
+    return ${PIPESTATUS[0]}
+}
+
+b64_no_wrap() {
+    printf '%s' "$1" | base64 -w 0 2>/dev/null || printf '%s' "$1" | base64 | tr -d '\n'
+}
+
+url_encode() {
+    local encoded
+    encoded=$(printf '%s' "$1" | command jq -sRr @uri) || return $?
+    printf '%s' "$encoded" | tr -d '\r\n'
+}
+
+make_vmess_link() {
+    local json="$1"
+    printf '%s' "$json" | command jq -e . >/dev/null 2>&1 || return 1
+    printf 'vmess://%s' "$(b64_no_wrap "$json")"
 }
 
 # 颜色定义
@@ -100,6 +117,23 @@ cat > /usr/local/bin/sb <<'EOF'
 # 覆写 jq 确保所有提取出来的 JSON 字段都不带 Windows 的 \r 回车符
 jq() {
     command jq "$@" | tr -d '\r'
+    return ${PIPESTATUS[0]}
+}
+
+b64_no_wrap() {
+    printf '%s' "$1" | base64 -w 0 2>/dev/null || printf '%s' "$1" | base64 | tr -d '\n'
+}
+
+url_encode() {
+    local encoded
+    encoded=$(printf '%s' "$1" | command jq -sRr @uri) || return $?
+    printf '%s' "$encoded" | tr -d '\r\n'
+}
+
+make_vmess_link() {
+    local json="$1"
+    printf '%s' "$json" | command jq -e . >/dev/null 2>&1 || return 1
+    printf 'vmess://%s' "$(b64_no_wrap "$json")"
 }
 
 if [[ $EUID -ne 0 ]]; then
@@ -313,7 +347,8 @@ EOF2
 }
 EOF2
 )
-        local vmess_link="vmess://$(echo -n "$vmess_json" | base64 -w 0)"
+        local vmess_link
+        vmess_link=$(make_vmess_link "$vmess_json")
         echo "2. VMess-WS (无TLS):" >> /etc/s-box/info.log
         echo "${vmess_link}" >> /etc/s-box/info.log
         echo "" >> /etc/s-box/info.log
@@ -325,7 +360,7 @@ EOF2
         local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .users[0].password' /etc/s-box/sb.json)
         local sni_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .tls.server_name' /etc/s-box/sb.json)
         local path_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .transport.path' /etc/s-box/sb.json)
-        local path_trojan_encoded=$(echo -n "$path_trojan" | jq -sRr @uri | tr -d '\n')
+        local path_trojan_encoded=$(url_encode "$path_trojan")
         local trojan_link="trojan://${pass_trojan}@${ip}:${port_trojan}?security=tls&sni=${sni_trojan}&allowInsecure=1&type=ws&path=${path_trojan_encoded}#SB-Trojan-WS-TLS"
         echo "3. Trojan-WS-TLS (自签证书):" >> /etc/s-box/info.log
         echo "${trojan_link}" >> /etc/s-box/info.log
@@ -401,7 +436,8 @@ EOF2
 }
 EOF2
 )
-                local vmess_argo_80_link="vmess://$(echo -n "$vmess_argo_json" | base64 -w 0)"
+                local vmess_argo_80_link
+                vmess_argo_80_link=$(make_vmess_link "$vmess_argo_json")
 
                 local vmess_argo_tls_json=$(cat <<EOF2
 {
@@ -421,7 +457,8 @@ EOF2
 }
 EOF2
 )
-                local vmess_argo_443_link="vmess://$(echo -n "$vmess_argo_tls_json" | base64 -w 0)"
+                local vmess_argo_443_link
+                vmess_argo_443_link=$(make_vmess_link "$vmess_argo_tls_json")
 
                 echo "1. VMess Argo (80端口):" >> /etc/s-box/info.log
                 echo "${vmess_argo_80_link}" >> /etc/s-box/info.log
@@ -434,7 +471,7 @@ EOF2
             if jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
                 local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .users[0].password' /etc/s-box/sb.json)
                 local path_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
-                local path_trojan_ws_encoded=$(echo -n "$path_trojan_ws" | jq -sRr @uri | tr -d '\n')
+                local path_trojan_ws_encoded=$(url_encode "$path_trojan_ws")
                 
                 local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-80"
                 local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${argo_domain}&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-443"
@@ -470,7 +507,8 @@ EOF2
 }
 EOF2
 )
-                local vmess_argo_80_link="vmess://$(echo -n "$vmess_argo_json" | base64 -w 0)"
+                local vmess_argo_80_link
+                vmess_argo_80_link=$(make_vmess_link "$vmess_argo_json")
 
                 local vmess_argo_tls_json=$(cat <<EOF2
 {
@@ -490,7 +528,8 @@ EOF2
 }
 EOF2
 )
-                local vmess_argo_443_link="vmess://$(echo -n "$vmess_argo_tls_json" | base64 -w 0)"
+                local vmess_argo_443_link
+                vmess_argo_443_link=$(make_vmess_link "$vmess_argo_tls_json")
 
                 echo "${argo_idx}. VMess Argo (80端口):" >> /etc/s-box/info.log
                 echo "${vmess_argo_80_link}" >> /etc/s-box/info.log
@@ -505,7 +544,7 @@ EOF2
             if jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1 && [[ -n "$ARGO_TROJAN_DOMAIN" ]]; then
                 local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .users[0].password' /etc/s-box/sb.json)
                 local path_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
-                local path_trojan_ws_encoded=$(echo -n "$path_trojan_ws" | jq -sRr @uri | tr -d '\n')
+                local path_trojan_ws_encoded=$(url_encode "$path_trojan_ws")
                 
                 local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-80"
                 local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_TROJAN_DOMAIN}&type=ws&path=${path_trojan_ws_encoded}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-443"
@@ -2592,14 +2631,16 @@ if is_enabled "$ENABLE_VMESS"; then
 }
 EOF
 )
-    VMESS_LINK="vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
+    VMESS_LINK=$(make_vmess_link "$VMESS_JSON")
     echo "2. VMess-WS (无TLS):" >> /etc/s-box/info.log
     echo "${VMESS_LINK}" >> /etc/s-box/info.log
     echo "" >> /etc/s-box/info.log
 fi
 
 if is_enabled "$ENABLE_TROJAN"; then
-    TROJAN_LINK="trojan://${UUID}@${IP}:${PORT_TROJAN_TLS}?security=tls&sni=www.bing.com&allowInsecure=1&type=ws&path=%2F${UUID}-tr#SB-Trojan-WS-TLS"
+    TROJAN_PATH="/${UUID}-tr"
+    TROJAN_PATH_ENCODED=$(url_encode "$TROJAN_PATH")
+    TROJAN_LINK="trojan://${UUID}@${IP}:${PORT_TROJAN_TLS}?security=tls&sni=www.bing.com&allowInsecure=1&type=ws&path=${TROJAN_PATH_ENCODED}#SB-Trojan-WS-TLS"
     echo "3. Trojan-WS-TLS (自签证书):" >> /etc/s-box/info.log
     echo "${TROJAN_LINK}" >> /etc/s-box/info.log
     echo "" >> /etc/s-box/info.log
@@ -2661,7 +2702,7 @@ if is_enabled "$ENABLE_ARGO"; then
 }
 EOF
 )
-            VMESS_ARGO_80_LINK="vmess://$(echo -n "$VMESS_ARGO_JSON" | base64 -w 0)"
+            VMESS_ARGO_80_LINK=$(make_vmess_link "$VMESS_ARGO_JSON")
 
             VMESS_ARGO_TLS_JSON=$(cat <<EOF
 {
@@ -2681,7 +2722,7 @@ EOF
 }
 EOF
 )
-            VMESS_ARGO_443_LINK="vmess://$(echo -n "$VMESS_ARGO_TLS_JSON" | base64 -w 0)"
+            VMESS_ARGO_443_LINK=$(make_vmess_link "$VMESS_ARGO_TLS_JSON")
 
             echo "1. VMess Argo (80端口):" >> /etc/s-box/info.log
             echo "${VMESS_ARGO_80_LINK}" >> /etc/s-box/info.log
@@ -2692,8 +2733,10 @@ EOF
         fi
 
         if is_enabled "$ENABLE_TROJAN"; then
-            TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-80"
-            TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_DOMAIN}&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_DOMAIN}#SB-Trojan-Argo-443"
+            TROJAN_ARGO_PATH="/${UUID}-tr-argo"
+            TROJAN_ARGO_PATH_ENCODED=$(url_encode "$TROJAN_ARGO_PATH")
+            TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_DOMAIN}#SB-Trojan-Argo-80"
+            TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_DOMAIN}&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_DOMAIN}#SB-Trojan-Argo-443"
 
             echo "3. Trojan Argo (80端口):" >> /etc/s-box/info.log
             echo "${TROJAN_ARGO_80_LINK}" >> /etc/s-box/info.log
@@ -2724,7 +2767,7 @@ EOF
 }
 EOF
 )
-            VMESS_ARGO_80_LINK="vmess://$(echo -n "$VMESS_ARGO_JSON" | base64 -w 0)"
+            VMESS_ARGO_80_LINK=$(make_vmess_link "$VMESS_ARGO_JSON")
 
             VMESS_ARGO_TLS_JSON=$(cat <<EOF
 {
@@ -2744,7 +2787,7 @@ EOF
 }
 EOF
 )
-            VMESS_ARGO_443_LINK="vmess://$(echo -n "$VMESS_ARGO_TLS_JSON" | base64 -w 0)"
+            VMESS_ARGO_443_LINK=$(make_vmess_link "$VMESS_ARGO_TLS_JSON")
 
             echo "${argo_idx}. VMess Argo (80端口):" >> /etc/s-box/info.log
             echo "${VMESS_ARGO_80_LINK}" >> /etc/s-box/info.log
@@ -2757,8 +2800,10 @@ EOF
         fi
 
         if is_enabled "$ENABLE_TROJAN" && [[ -n "$ARGO_TROJAN_DOMAIN" ]]; then
-            TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-80"
-            TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_TROJAN_DOMAIN}&type=ws&path=%2F${UUID}-tr-argo&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-443"
+            TROJAN_ARGO_PATH="/${UUID}-tr-argo"
+            TROJAN_ARGO_PATH_ENCODED=$(url_encode "$TROJAN_ARGO_PATH")
+            TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-80"
+            TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_TROJAN_DOMAIN}&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-443"
 
             echo "${argo_idx}. Trojan Argo (80端口):" >> /etc/s-box/info.log
             echo "${TROJAN_ARGO_80_LINK}" >> /etc/s-box/info.log
