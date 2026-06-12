@@ -422,7 +422,7 @@ EOF2
 {
   "v": "2",
   "ps": "SB-VMess-Argo-80",
-  "add": "cdn.2020111.xyz",
+  "add": "${argo_domain}",
   "port": "80",
   "id": "${uuid_vmess}",
   "aid": "0",
@@ -443,7 +443,7 @@ EOF2
 {
   "v": "2",
   "ps": "SB-VMess-Argo-443",
-  "add": "cdn.2020111.xyz",
+  "add": "${argo_domain}",
   "port": "443",
   "id": "${uuid_vmess}",
   "aid": "0",
@@ -473,8 +473,8 @@ EOF2
                 local path_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
                 local path_trojan_ws_encoded=$(url_encode "$path_trojan_ws")
                 
-                local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-80"
-                local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${argo_domain}&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-443"
+                local trojan_argo_80_link="trojan://${pass_trojan}@${argo_domain}:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-80"
+                local trojan_argo_443_link="trojan://${pass_trojan}@${argo_domain}:443?security=tls&sni=${argo_domain}&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-443"
 
                 echo "3. Trojan Argo (80端口):" >> /etc/s-box/info.log
                 echo "${trojan_argo_80_link}" >> /etc/s-box/info.log
@@ -493,7 +493,7 @@ EOF2
 {
   "v": "2",
   "ps": "SB-VMess-Argo-80",
-  "add": "cdn.2020111.xyz",
+  "add": "${ARGO_VMESS_DOMAIN}",
   "port": "80",
   "id": "${uuid_vmess}",
   "aid": "0",
@@ -514,7 +514,7 @@ EOF2
 {
   "v": "2",
   "ps": "SB-VMess-Argo-443",
-  "add": "cdn.2020111.xyz",
+  "add": "${ARGO_VMESS_DOMAIN}",
   "port": "443",
   "id": "${uuid_vmess}",
   "aid": "0",
@@ -546,8 +546,8 @@ EOF2
                 local path_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
                 local path_trojan_ws_encoded=$(url_encode "$path_trojan_ws")
                 
-                local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-80"
-                local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_TROJAN_DOMAIN}&type=ws&path=${path_trojan_ws_encoded}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-443"
+                local trojan_argo_80_link="trojan://${pass_trojan}@${ARGO_TROJAN_DOMAIN}:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-80"
+                local trojan_argo_443_link="trojan://${pass_trojan}@${ARGO_TROJAN_DOMAIN}:443?security=tls&sni=${ARGO_TROJAN_DOMAIN}&type=ws&path=${path_trojan_ws_encoded}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-443"
 
                 echo "${argo_idx}. Trojan Argo (80端口):" >> /etc/s-box/info.log
                 echo "${trojan_argo_80_link}" >> /etc/s-box/info.log
@@ -612,8 +612,24 @@ update_argo_domain() {
 }
 
 apply_changes() {
+    if ! /etc/s-box/sing-box check -c /etc/s-box/sb.json >/tmp/s-box-check.log 2>&1; then
+        echo "错误：sing-box 配置校验失败，未重启服务。"
+        cat /tmp/s-box-check.log
+        return 1
+    fi
+
     echo "正在应用更改，重启 Sing-box 服务..."
     service_restart sing-box
+    sleep 1
+    if ! service_is_active sing-box; then
+        echo "错误：sing-box 服务启动失败。"
+        if $IS_OPENRC; then
+            tail -n 50 /var/log/sing-box.log 2>/dev/null
+        else
+            journalctl -u sing-box -n 50 --no-pager
+        fi
+        return 1
+    fi
     
     if [[ -f /etc/s-box/argo.conf ]]; then
         source /etc/s-box/argo.conf
@@ -632,6 +648,69 @@ apply_changes() {
     
     regenerate_info_log
     echo "更改已成功应用并重启服务！"
+}
+
+repair_runtime_config() {
+    if [[ ! -f /etc/s-box/sb.json ]]; then
+        echo "未找到 /etc/s-box/sb.json，无法修复。"
+        return 1
+    fi
+
+    echo "正在修复本地监听地址并同步 Argo/Nginx 配置..."
+    local temp_json=$(mktemp)
+    if ! jq '
+        .inbounds |= map(
+            if (.tag == "trojan-ws-in") then
+                .listen = "127.0.0.1"
+            elif (.tag == "vless-in" or .tag == "vmess-in" or .tag == "trojan-tls-in" or .tag == "hy2-in" or .tag == "tuic-in" or .tag == "anytls-in") then
+                .listen = "0.0.0.0"
+            else
+                .
+            end
+        )
+    ' /etc/s-box/sb.json > "$temp_json"; then
+        rm -f "$temp_json"
+        echo "修复失败：无法写入 JSON。"
+        return 1
+    fi
+    mv "$temp_json" /etc/s-box/sb.json
+
+    if ! /etc/s-box/sing-box check -c /etc/s-box/sb.json >/tmp/s-box-check.log 2>&1; then
+        echo "错误：修复后的 sing-box 配置校验失败。"
+        cat /tmp/s-box-check.log
+        return 1
+    fi
+
+    if [[ -f /etc/s-box/argo.conf ]]; then
+        source /etc/s-box/argo.conf
+    fi
+    if is_enabled "$USE_NGINX" && [[ -f ${NGINX_CONF_DIR}/singbox-argo.conf ]]; then
+        regenerate_nginx_conf
+        service_restart nginx
+    fi
+
+    service_restart sing-box
+    sleep 1
+    if ! service_is_active sing-box; then
+        echo "错误：sing-box 服务启动失败。"
+        if $IS_OPENRC; then
+            tail -n 50 /var/log/sing-box.log 2>/dev/null
+        else
+            journalctl -u sing-box -n 50 --no-pager
+        fi
+        return 1
+    fi
+    [[ -f /etc/s-box/argo.conf ]] && service_restart argo-tunnel
+    regenerate_info_log
+
+    echo "修复完成。当前监听："
+    ss -tlnp 2>/dev/null | grep -E ':(8401|8402|38202|48203|58204)\b' || true
+    echo ""
+    echo "如果使用免 Nginx 固定隧道，请确认 Cloudflare Public Hostname："
+    local vmess_port=$(jq -r '.inbounds[] | select(.tag=="vmess-in") | .listen_port' /etc/s-box/sb.json 2>/dev/null)
+    local trojan_ws_port=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .listen_port' /etc/s-box/sb.json 2>/dev/null)
+    [[ -n "$ARGO_VMESS_DOMAIN" && -n "$vmess_port" ]] && echo "  ${ARGO_VMESS_DOMAIN} -> http://127.0.0.1:${vmess_port}"
+    [[ -n "$ARGO_TROJAN_DOMAIN" && -n "$trojan_ws_port" ]] && echo "  ${ARGO_TROJAN_DOMAIN} -> http://127.0.0.1:${trojan_ws_port}"
 }
 
 check_port() {
@@ -1518,6 +1597,11 @@ view_logs() {
     done
 }
 
+if [[ "$1" == "repair" ]]; then
+    repair_runtime_config
+    exit $?
+fi
+
 if [[ "$1" == "cron" ]]; then
     log_file="/etc/s-box/monitor.log"
     # 如果日志文件超过 50KB 则进行清空截断，避免体积无限膨胀
@@ -1588,9 +1672,10 @@ while true; do
     echo "7. 彻底卸载脚本环境"
     echo "8. 开启/关闭服务自愈守护任务 (当前: $(check_cron_status))"
     echo "9. 查看运行日志"
+    echo "10. 诊断并修复监听/Argo 同步"
     echo "0. 退出"
     echo "=================================================="
-    read -p "请输入选项 [0-9]: " menu_choice
+    read -p "请输入选项 [0-10]: " menu_choice
     case $menu_choice in
         1)
             if [[ -f /etc/s-box/info.log ]]; then
@@ -1705,6 +1790,10 @@ while true; do
         9)
             view_logs
             ;;
+        10)
+            repair_runtime_config
+            read -p "按回车键继续..." temp
+            ;;
         0)
             exit 0
             ;;
@@ -1716,6 +1805,12 @@ done
 EOF
 chmod +x /usr/local/bin/sb
 }
+
+if [[ "$1" == "repair" ]]; then
+    create_sb_tool >/dev/null 2>&1
+    bash /usr/local/bin/sb repair
+    exit $?
+fi
 
 # 检测是否已安装
 if [[ -f /etc/s-box/sb.json ]]; then
@@ -2161,6 +2256,11 @@ fi
 IPV4=$(curl -s4m5 icanhazip.com || curl -s4m5 api.ipify.org)
 IPV6=$(curl -s6m5 icanhazip.com || curl -s6m5 api6.ipify.org)
 IP=${IPV4:-$IPV6}
+SINGBOX_PUBLIC_LISTEN="0.0.0.0"
+if [[ -z "$IPV4" && -n "$IPV6" ]]; then
+    SINGBOX_PUBLIC_LISTEN="::"
+fi
+SINGBOX_LOCAL_LISTEN="127.0.0.1"
 
 # 8. 动态生成 sing-box 配置文件 sb.json
 log_info "正在生成 sing-box 配置文件..."
@@ -2170,7 +2270,7 @@ if is_enabled "$ENABLE_VLESS"; then
     inbounds+=('{
       "type": "vless",
       "tag": "vless-in",
-      "listen": "::",
+      "listen": "'"${SINGBOX_PUBLIC_LISTEN}"'",
       "listen_port": '"${PORT_VLESS}"',
       "users": [
         {
@@ -2200,7 +2300,7 @@ if is_enabled "$ENABLE_VMESS"; then
     inbounds+=('{
       "type": "vmess",
       "tag": "vmess-in",
-      "listen": "::",
+      "listen": "'"${SINGBOX_PUBLIC_LISTEN}"'",
       "listen_port": '"${PORT_VMESS}"',
       "users": [
         {
@@ -2221,7 +2321,7 @@ if is_enabled "$ENABLE_TROJAN"; then
     inbounds+=('{
       "type": "trojan",
       "tag": "trojan-tls-in",
-      "listen": "::",
+      "listen": "'"${SINGBOX_PUBLIC_LISTEN}"'",
       "listen_port": '"${PORT_TROJAN_TLS}"',
       "users": [
         {
@@ -2246,7 +2346,7 @@ if is_enabled "$ENABLE_ARGO" && is_enabled "$ENABLE_TROJAN"; then
     inbounds+=('{
       "type": "trojan",
       "tag": "trojan-ws-in",
-      "listen": "::",
+      "listen": "'"${SINGBOX_LOCAL_LISTEN}"'",
       "listen_port": '"${PORT_TROJAN_WS}"',
       "users": [
         {
@@ -2264,7 +2364,7 @@ if is_enabled "$ENABLE_HY2"; then
     inbounds+=('{
       "type": "hysteria2",
       "tag": "hy2-in",
-      "listen": "::",
+      "listen": "'"${SINGBOX_PUBLIC_LISTEN}"'",
       "listen_port": '"${PORT_HY2}"',
       "users": [
         {
@@ -2286,7 +2386,7 @@ if is_enabled "$ENABLE_TUIC"; then
     inbounds+=('{
       "type": "tuic",
       "tag": "tuic-in",
-      "listen": "::",
+      "listen": "'"${SINGBOX_PUBLIC_LISTEN}"'",
       "listen_port": '"${PORT_TUIC}"',
       "users": [
         {
@@ -2310,7 +2410,7 @@ if is_enabled "$ENABLE_ANYTLS"; then
     inbounds+=('{
       "type": "anytls",
       "tag": "anytls-in",
-      "listen": "::",
+      "listen": "'"${SINGBOX_PUBLIC_LISTEN}"'",
       "listen_port": '"${PORT_ANYTLS}"',
       "users": [
         {
@@ -2354,6 +2454,12 @@ cat > /etc/s-box/sb.json <<EOF
   ]
 }
 EOF
+
+if ! /etc/s-box/sing-box check -c /etc/s-box/sb.json >/tmp/s-box-check.log 2>&1; then
+    log_err "sing-box 配置校验失败，服务不会启动。错误如下："
+    cat /tmp/s-box-check.log
+    exit 1
+fi
 
 # 9. 配置 Nginx（仅如果启用了 Argo 且启用了 Nginx）
 if is_enabled "$ENABLE_ARGO" && is_enabled "$USE_NGINX"; then
@@ -2466,6 +2572,17 @@ EOF
     systemctl daemon-reload
     systemctl enable sing-box
     systemctl restart sing-box
+fi
+
+sleep 1
+if ! service_is_active sing-box; then
+    log_err "sing-box 服务启动失败，请查看下面的日志。"
+    if $IS_OPENRC; then
+        tail -n 50 /var/log/sing-box.log 2>/dev/null
+    else
+        journalctl -u sing-box -n 50 --no-pager
+    fi
+    exit 1
 fi
 
 # Argo 隧道服务（仅在启用 Argo 时）
@@ -2688,7 +2805,7 @@ if is_enabled "$ENABLE_ARGO"; then
 {
   "v": "2",
   "ps": "SB-VMess-Argo-80",
-  "add": "cdn.2020111.xyz",
+  "add": "${ARGO_DOMAIN}",
   "port": "80",
   "id": "${UUID}",
   "aid": "0",
@@ -2708,7 +2825,7 @@ EOF
 {
   "v": "2",
   "ps": "SB-VMess-Argo-443",
-  "add": "cdn.2020111.xyz",
+  "add": "${ARGO_DOMAIN}",
   "port": "443",
   "id": "${UUID}",
   "aid": "0",
@@ -2735,8 +2852,8 @@ EOF
         if is_enabled "$ENABLE_TROJAN"; then
             TROJAN_ARGO_PATH="/${UUID}-tr-argo"
             TROJAN_ARGO_PATH_ENCODED=$(url_encode "$TROJAN_ARGO_PATH")
-            TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_DOMAIN}#SB-Trojan-Argo-80"
-            TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_DOMAIN}&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_DOMAIN}#SB-Trojan-Argo-443"
+            TROJAN_ARGO_80_LINK="trojan://${UUID}@${ARGO_DOMAIN}:80?security=none&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_DOMAIN}#SB-Trojan-Argo-80"
+            TROJAN_ARGO_443_LINK="trojan://${UUID}@${ARGO_DOMAIN}:443?security=tls&sni=${ARGO_DOMAIN}&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_DOMAIN}#SB-Trojan-Argo-443"
 
             echo "3. Trojan Argo (80端口):" >> /etc/s-box/info.log
             echo "${TROJAN_ARGO_80_LINK}" >> /etc/s-box/info.log
@@ -2753,7 +2870,7 @@ EOF
 {
   "v": "2",
   "ps": "SB-VMess-Argo-80",
-  "add": "cdn.2020111.xyz",
+  "add": "${ARGO_VMESS_DOMAIN}",
   "port": "80",
   "id": "${UUID}",
   "aid": "0",
@@ -2773,7 +2890,7 @@ EOF
 {
   "v": "2",
   "ps": "SB-VMess-Argo-443",
-  "add": "cdn.2020111.xyz",
+  "add": "${ARGO_VMESS_DOMAIN}",
   "port": "443",
   "id": "${UUID}",
   "aid": "0",
@@ -2802,8 +2919,8 @@ EOF
         if is_enabled "$ENABLE_TROJAN" && [[ -n "$ARGO_TROJAN_DOMAIN" ]]; then
             TROJAN_ARGO_PATH="/${UUID}-tr-argo"
             TROJAN_ARGO_PATH_ENCODED=$(url_encode "$TROJAN_ARGO_PATH")
-            TROJAN_ARGO_80_LINK="trojan://${UUID}@cdn.2020111.xyz:80?security=none&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-80"
-            TROJAN_ARGO_443_LINK="trojan://${UUID}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_TROJAN_DOMAIN}&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-443"
+            TROJAN_ARGO_80_LINK="trojan://${UUID}@${ARGO_TROJAN_DOMAIN}:80?security=none&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-80"
+            TROJAN_ARGO_443_LINK="trojan://${UUID}@${ARGO_TROJAN_DOMAIN}:443?security=tls&sni=${ARGO_TROJAN_DOMAIN}&type=ws&path=${TROJAN_ARGO_PATH_ENCODED}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-443"
 
             echo "${argo_idx}. Trojan Argo (80端口):" >> /etc/s-box/info.log
             echo "${TROJAN_ARGO_80_LINK}" >> /etc/s-box/info.log
