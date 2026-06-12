@@ -9,6 +9,11 @@ fi
 # 设置语言环境
 export LANG=en_US.UTF-8
 
+# 覆写 jq 确保所有提取出来的 JSON 字段都不带 Windows 的 \r 回车符
+jq() {
+    command jq "$@" | tr -d '\r'
+}
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -91,6 +96,11 @@ create_sb_tool() {
 cat > /usr/local/bin/sb <<'EOF'
 #!/bin/bash
 # Sing-box 极简快捷管理工具
+
+# 覆写 jq 确保所有提取出来的 JSON 字段都不带 Windows 的 \r 回车符
+jq() {
+    command jq "$@" | tr -d '\r'
+}
 
 if [[ $EUID -ne 0 ]]; then
    echo "错误：必须以 root 权限运行此脚本！"
@@ -245,13 +255,13 @@ regenerate_info_log() {
     
     local public_key=""
     if [[ -f /etc/s-box/public.key ]]; then
-        public_key=$(cat /etc/s-box/public.key)
+        public_key=$(cat /etc/s-box/public.key | tr -d '\r\n')
     fi
     local short_id=$(jq -r '.inbounds[] | select(.tag=="vless-in") | .tls.reality.short_id[0] // empty' /etc/s-box/sb.json)
     
     local argo_domain=""
     if [[ -f /etc/s-box/argo.log ]]; then
-        argo_domain=$(cat /etc/s-box/argo.log)
+        argo_domain=$(cat /etc/s-box/argo.log | tr -d '\r\n')
     fi
     
     local argo_mode="temp"
