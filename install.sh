@@ -219,6 +219,104 @@ is_enabled() {
     [[ "$1" == "y" || "$1" == "yes" || -z "$1" ]] && return 0 || return 1
 }
 
+get_argo_recent_logs() {
+    if $IS_OPENRC; then
+        cat /var/log/argo-tunnel.log /var/log/argo-tunnel.err 2>/dev/null
+    else
+        journalctl -u argo-tunnel -n 200 --no-pager 2>/dev/null
+    fi
+}
+
+extract_cloudflared_config_json() {
+    local escaped_config
+    escaped_config=$(get_argo_recent_logs | awk '
+        match($0, /config="/) {
+            line = substr($0, RSTART + 8)
+            sub(/" version=.*/, "", line)
+            print line
+        }
+    ' | tail -n 1)
+    [[ -z "$escaped_config" ]] && return 1
+    printf '%s' "${escaped_config//\\\"/\"}"
+}
+
+sync_argo_domains_from_cloudflared_config() {
+    [[ -f /etc/s-box/argo.conf && -f /etc/s-box/sb.json ]] || return 0
+    source /etc/s-box/argo.conf
+    [[ "$ARGO_MODE" == "token" ]] || return 0
+    is_enabled "$USE_NGINX" && return 0
+
+    local vmess_port trojan_ws_port config_json
+    local cf_vmess_domain="" cf_trojan_domain=""
+    local synced_vmess_domain="$ARGO_VMESS_DOMAIN"
+    local synced_trojan_domain="$ARGO_TROJAN_DOMAIN"
+    local changed=false
+
+    vmess_port=$(jq -r '.inbounds[]? | select(.tag=="vmess-in") | .listen_port // empty' /etc/s-box/sb.json 2>/dev/null | head -n 1)
+    trojan_ws_port=$(jq -r '.inbounds[]? | select(.tag=="trojan-ws-in") | .listen_port // empty' /etc/s-box/sb.json 2>/dev/null | head -n 1)
+
+    config_json=""
+    for i in {1..5}; do
+        if config_json=$(extract_cloudflared_config_json); then
+            break
+        fi
+        sleep 2
+    done
+    if [[ -z "$config_json" ]]; then
+        echo "警告：未从 cloudflared 日志中找到远端 ingress 配置，跳过域名端口反向同步。"
+        return 0
+    fi
+    if ! printf '%s' "$config_json" | command jq -e '.ingress' >/dev/null 2>&1; then
+        echo "警告：cloudflared ingress 配置解析失败，跳过域名端口反向同步。"
+        return 0
+    fi
+
+    if [[ -n "$vmess_port" && "$vmess_port" != "null" ]]; then
+        cf_vmess_domain=$(printf '%s' "$config_json" | command jq -r --arg port "$vmess_port" '
+            .ingress[]?
+            | select((.hostname? // "") != "" and ((.service? // "") | test("://(127[.]0[.]0[.]1|localhost):" + $port + "($|/)")))
+            | .hostname
+        ' 2>/dev/null | head -n 1 | tr -d '\r')
+    fi
+    if [[ -n "$trojan_ws_port" && "$trojan_ws_port" != "null" ]]; then
+        cf_trojan_domain=$(printf '%s' "$config_json" | command jq -r --arg port "$trojan_ws_port" '
+            .ingress[]?
+            | select((.hostname? // "") != "" and ((.service? // "") | test("://(127[.]0[.]0[.]1|localhost):" + $port + "($|/)")))
+            | .hostname
+        ' 2>/dev/null | head -n 1 | tr -d '\r')
+    fi
+
+    if [[ -n "$cf_vmess_domain" && "$cf_vmess_domain" != "$ARGO_VMESS_DOMAIN" ]]; then
+        synced_vmess_domain="$cf_vmess_domain"
+        changed=true
+        echo "已按 cloudflared 配置同步 VMess 域名: ${synced_vmess_domain} -> 127.0.0.1:${vmess_port}"
+    fi
+    if [[ -n "$cf_trojan_domain" && "$cf_trojan_domain" != "$ARGO_TROJAN_DOMAIN" ]]; then
+        synced_trojan_domain="$cf_trojan_domain"
+        changed=true
+        echo "已按 cloudflared 配置同步 Trojan 域名: ${synced_trojan_domain} -> 127.0.0.1:${trojan_ws_port}"
+    fi
+
+    if ! $changed; then
+        [[ -n "$cf_vmess_domain" || -z "$vmess_port" ]] || echo "警告：未在 cloudflared 配置中找到 VMess 端口 ${vmess_port} 对应域名。"
+        [[ -n "$cf_trojan_domain" || -z "$trojan_ws_port" ]] || echo "警告：未在 cloudflared 配置中找到 Trojan 端口 ${trojan_ws_port} 对应域名。"
+        return 0
+    fi
+
+    ARGO_VMESS_DOMAIN="$synced_vmess_domain"
+    ARGO_TROJAN_DOMAIN="$synced_trojan_domain"
+    cat > /etc/s-box/argo.conf <<EOF_ARGO
+ARGO_MODE="${ARGO_MODE}"
+ARGO_TOKEN="${ARGO_TOKEN}"
+ARGO_DOMAIN="${ARGO_DOMAIN}"
+ARGO_VMESS_DOMAIN="${ARGO_VMESS_DOMAIN}"
+ARGO_TROJAN_DOMAIN="${ARGO_TROJAN_DOMAIN}"
+USE_NGINX="${USE_NGINX}"
+ARGO_PORT="${ARGO_PORT}"
+EOF_ARGO
+    echo "${ARGO_VMESS_DOMAIN:-$ARGO_TROJAN_DOMAIN}" > /etc/s-box/argo.log
+}
+
 # 重新生成 Nginx 配置
 regenerate_nginx_conf() {
     if ! is_enabled "$USE_NGINX"; then
@@ -643,6 +741,8 @@ apply_changes() {
     elif [[ -f /etc/s-box/argo.conf ]]; then
         echo "正在重启 Argo 服务..."
         service_restart argo-tunnel
+        sleep 2
+        sync_argo_domains_from_cloudflared_config
         update_argo_domain
     fi
     
@@ -700,7 +800,11 @@ repair_runtime_config() {
         fi
         return 1
     fi
-    [[ -f /etc/s-box/argo.conf ]] && service_restart argo-tunnel
+    if [[ -f /etc/s-box/argo.conf ]]; then
+        service_restart argo-tunnel
+        sleep 2
+        sync_argo_domains_from_cloudflared_config
+    fi
     regenerate_info_log
 
     echo "修复完成。当前监听："
@@ -711,6 +815,7 @@ repair_runtime_config() {
     local trojan_ws_port=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .listen_port' /etc/s-box/sb.json 2>/dev/null)
     [[ -n "$ARGO_VMESS_DOMAIN" && -n "$vmess_port" ]] && echo "  ${ARGO_VMESS_DOMAIN} -> http://127.0.0.1:${vmess_port}"
     [[ -n "$ARGO_TROJAN_DOMAIN" && -n "$trojan_ws_port" ]] && echo "  ${ARGO_TROJAN_DOMAIN} -> http://127.0.0.1:${trojan_ws_port}"
+    [[ -n "$ARGO_TROJAN_DOMAIN" ]] && echo "Trojan Argo 链接必须使用 ${ARGO_TROJAN_DOMAIN}，不能使用 VMess 域名。"
 }
 
 check_port() {
