@@ -2115,8 +2115,8 @@ cat > /etc/s-box/sb.json <<EOF
 }
 EOF
 
-# 9. 配置 Nginx（仅如果启用了 Argo）
-if is_enabled "$ENABLE_ARGO"; then
+# 9. 配置 Nginx（仅如果启用了 Argo 且启用了 Nginx）
+if is_enabled "$ENABLE_ARGO" && is_enabled "$USE_NGINX"; then
     log_info "正在配置 Nginx..."
     
     # 动态写入 nginx location 块
