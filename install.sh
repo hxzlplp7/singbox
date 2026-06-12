@@ -1924,11 +1924,25 @@ read -p "请输入选项 [1-3, 默认1]: " port_choice
 
 if [[ "$port_choice" == "2" ]]; then
     is_enabled "$ENABLE_VLESS" && PORT_VLESS=$(get_custom_port "VLESS-Reality" 28201)
-    is_enabled "$ENABLE_VMESS" && PORT_VMESS=$(get_custom_port "VMess-WS" 38202)
+    if is_enabled "$ENABLE_VMESS"; then
+        if is_enabled "$ENABLE_ARGO" && ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]]; then
+            PORT_VMESS=8401
+            log_info "Argo 免 Nginx 穿透 VMess-WS，本地端口已自动固定为 8401。"
+        else
+            PORT_VMESS=$(get_custom_port "VMess-WS" 38202)
+        fi
+    fi
     is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_custom_port "Trojan-WS-TLS" 48203)
     if is_enabled "$ENABLE_ARGO"; then
         if is_enabled "$USE_NGINX" || [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
-            is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_custom_port "Trojan-WS (Argo内部)" 58204)
+            if is_enabled "$ENABLE_TROJAN"; then
+                if ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
+                    PORT_TROJAN_WS=8401
+                    log_info "Argo 免 Nginx 穿透 Trojan-WS，本地端口已自动固定为 8401。"
+                else
+                    PORT_TROJAN_WS=$(get_custom_port "Trojan-WS (Argo内部)" 58204)
+                fi
+            fi
         fi
         is_enabled "$USE_NGINX" && PORT_NGINX=8401
     fi
@@ -1938,11 +1952,23 @@ if [[ "$port_choice" == "2" ]]; then
 elif [[ "$port_choice" == "3" ]]; then
     read start_p end_p <<< $(get_port_range)
     is_enabled "$ENABLE_VLESS" && PORT_VLESS=$(get_random_port_in_range $start_p $end_p)
-    is_enabled "$ENABLE_VMESS" && PORT_VMESS=$(get_random_port_in_range $start_p $end_p)
+    if is_enabled "$ENABLE_VMESS"; then
+        if is_enabled "$ENABLE_ARGO" && ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]]; then
+            PORT_VMESS=8401
+        else
+            PORT_VMESS=$(get_random_port_in_range $start_p $end_p)
+        fi
+    fi
     is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_random_port_in_range $start_p $end_p)
     if is_enabled "$ENABLE_ARGO"; then
         if is_enabled "$USE_NGINX" || [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
-            is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_random_port_in_range $start_p $end_p)
+            if is_enabled "$ENABLE_TROJAN"; then
+                if ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
+                    PORT_TROJAN_WS=8401
+                else
+                    PORT_TROJAN_WS=$(get_random_port_in_range $start_p $end_p)
+                fi
+            fi
         fi
         is_enabled "$USE_NGINX" && PORT_NGINX=8401
     fi
@@ -1951,11 +1977,23 @@ elif [[ "$port_choice" == "3" ]]; then
     is_enabled "$ENABLE_ANYTLS" && PORT_ANYTLS=$(get_random_port_in_range $start_p $end_p)
 else
     is_enabled "$ENABLE_VLESS" && PORT_VLESS=$(get_random_port_in_range 20000 60000)
-    is_enabled "$ENABLE_VMESS" && PORT_VMESS=$(get_random_port_in_range 20000 60000)
+    if is_enabled "$ENABLE_VMESS"; then
+        if is_enabled "$ENABLE_ARGO" && ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]]; then
+            PORT_VMESS=8401
+        else
+            PORT_VMESS=$(get_random_port_in_range 20000 60000)
+        fi
+    fi
     is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_TLS=$(get_random_port_in_range 20000 60000)
     if is_enabled "$ENABLE_ARGO"; then
         if is_enabled "$USE_NGINX" || [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
-            is_enabled "$ENABLE_TROJAN" && PORT_TROJAN_WS=$(get_random_port_in_range 20000 60000)
+            if is_enabled "$ENABLE_TROJAN"; then
+                if ! is_enabled "$USE_NGINX" && [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
+                    PORT_TROJAN_WS=8401
+                else
+                    PORT_TROJAN_WS=$(get_random_port_in_range 20000 60000)
+                fi
+            fi
         fi
         is_enabled "$USE_NGINX" && PORT_NGINX=8401
     fi
@@ -1969,11 +2007,7 @@ if is_enabled "$ENABLE_ARGO"; then
     if is_enabled "$USE_NGINX"; then
         ARGO_PORT=$PORT_NGINX
     else
-        if [[ "$ARGO_TARGET_PROTOCOL" == "vmess" ]]; then
-            ARGO_PORT=$PORT_VMESS
-        elif [[ "$ARGO_TARGET_PROTOCOL" == "trojan" ]]; then
-            ARGO_PORT=$PORT_TROJAN_WS
-        fi
+        ARGO_PORT=8401
     fi
 fi
 
