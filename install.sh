@@ -1666,6 +1666,47 @@ if is_enabled "$ENABLE_ARGO"; then
             ARGO_TARGET_PROTOCOL="none"
         fi
     fi
+
+    # 选择 Argo 运行模式
+    ARGO_MODE="temp"
+    ARGO_TOKEN=""
+    ARGO_DOMAIN=""
+    
+    # 尝试从已有配置自适应继承
+    if [[ -f /etc/s-box/argo.conf ]]; then
+        source /etc/s-box/argo.conf
+        ARGO_MODE=$ARGO_MODE
+        ARGO_TOKEN=$ARGO_TOKEN
+        ARGO_DOMAIN=$ARGO_DOMAIN
+    fi
+    
+    # 如果原本就是 token 模式，或者手动选择，则走对应逻辑
+    if [[ "$ARGO_MODE" != "token" ]]; then
+        echo "=================================================="
+        echo "          请选择 Argo 隧道的运行模式"
+        echo "=================================================="
+        echo "1. 申请临时域名隧道 (TryCloudflare，直接回车)"
+        echo "2. 使用自备固定域名隧道 (使用 Cloudflare Tunnel Token)"
+        echo "=================================================="
+        read -p "请输入选项 [1-2, 默认1]: " argo_mode_choice
+        if [[ "$argo_mode_choice" == "2" ]]; then
+            ARGO_MODE="token"
+            while true; do
+                read -p "请输入您的 Cloudflare Tunnel Token: " ARGO_TOKEN
+                if [[ -n "$ARGO_TOKEN" ]]; then
+                    break
+                fi
+                log_err "Token 不能为空，请重新输入！"
+            done
+            while true; do
+                read -p "请输入您在 Cloudflare 上为该隧道绑定的自定义域名 (如: argo.example.com): " ARGO_DOMAIN
+                if [[ -n "$ARGO_DOMAIN" ]]; then
+                    break
+                fi
+                log_err "自定义域名不能为空，请重新输入！"
+            done
+        fi
+    fi
 fi
 
 # 1. 系统检测与包管理器识别
@@ -2230,10 +2271,11 @@ fi
 
 # Argo 隧道服务（仅在启用 Argo 时）
 if is_enabled "$ENABLE_ARGO"; then
-    argo_mode="temp"
-    argo_token=""
-    argo_domain=""
-    if [[ -f /etc/s-box/argo.conf ]]; then
+    # 优先使用交互确定的变量，否则读取已有配置
+    argo_mode="${ARGO_MODE:-temp}"
+    argo_token="${ARGO_TOKEN}"
+    argo_domain="${ARGO_DOMAIN}"
+    if [[ -z "$ARGO_TOKEN" && -f /etc/s-box/argo.conf ]]; then
         source /etc/s-box/argo.conf
         argo_mode=$ARGO_MODE
         argo_token=$ARGO_TOKEN
