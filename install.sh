@@ -315,7 +315,7 @@ EOF2
         local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .users[0].password' /etc/s-box/sb.json)
         local sni_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .tls.server_name' /etc/s-box/sb.json)
         local path_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-tls-in") | .transport.path' /etc/s-box/sb.json)
-        local path_trojan_encoded=$(echo -n "$path_trojan" | jq -sRr @uri)
+        local path_trojan_encoded=$(echo -n "$path_trojan" | jq -sRr @uri | tr -d '\n')
         local trojan_link="trojan://${pass_trojan}@${ip}:${port_trojan}?security=tls&sni=${sni_trojan}&allowInsecure=1&type=ws&path=${path_trojan_encoded}#SB-Trojan-WS-TLS"
         echo "3. Trojan-WS-TLS (自签证书):" >> /etc/s-box/info.log
         echo "${trojan_link}" >> /etc/s-box/info.log
@@ -424,7 +424,7 @@ EOF2
             if jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1; then
                 local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .users[0].password' /etc/s-box/sb.json)
                 local path_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
-                local path_trojan_ws_encoded=$(echo -n "$path_trojan_ws" | jq -sRr @uri)
+                local path_trojan_ws_encoded=$(echo -n "$path_trojan_ws" | jq -sRr @uri | tr -d '\n')
                 
                 local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-80"
                 local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${argo_domain}&type=ws&path=${path_trojan_ws_encoded}&host=${argo_domain}#SB-Trojan-Argo-443"
@@ -495,7 +495,7 @@ EOF2
             if jq -e '.inbounds[] | select(.tag=="trojan-ws-in")' /etc/s-box/sb.json >/dev/null 2>&1 && [[ -n "$ARGO_TROJAN_DOMAIN" ]]; then
                 local pass_trojan=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .users[0].password' /etc/s-box/sb.json)
                 local path_trojan_ws=$(jq -r '.inbounds[] | select(.tag=="trojan-ws-in") | .transport.path' /etc/s-box/sb.json)
-                local path_trojan_ws_encoded=$(echo -n "$path_trojan_ws" | jq -sRr @uri)
+                local path_trojan_ws_encoded=$(echo -n "$path_trojan_ws" | jq -sRr @uri | tr -d '\n')
                 
                 local trojan_argo_80_link="trojan://${pass_trojan}@cdn.2020111.xyz:80?security=none&type=ws&path=${path_trojan_ws_encoded}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-80"
                 local trojan_argo_443_link="trojan://${pass_trojan}@cdn.2020111.xyz:443?security=tls&sni=${ARGO_TROJAN_DOMAIN}&type=ws&path=${path_trojan_ws_encoded}&host=${ARGO_TROJAN_DOMAIN}#SB-Trojan-Argo-443"
