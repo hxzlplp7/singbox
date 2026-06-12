@@ -1625,6 +1625,11 @@ if [[ "$menu_choice" == "2" ]]; then
     read -p "7. 是否安装 Argo 隧道穿透 (支持 VMess/Trojan)? [Y/n, 默认Y]: " opt; [[ -n "$opt" ]] && ENABLE_ARGO=$(echo "$opt" | tr 'A-Z' 'a-z')
 fi
 
+# 统一判断，空值或 y/yes 都视为启用
+is_enabled() {
+    [[ "$1" == "y" || "$1" == "yes" || -z "$1" ]] && return 0 || return 1
+}
+
 # 提供是否使用 Nginx 的选择
 USE_NGINX="y"
 ARGO_TARGET_PROTOCOL=""
@@ -1662,11 +1667,6 @@ if is_enabled "$ENABLE_ARGO"; then
         fi
     fi
 fi
-
-# 统一判断，空值或 y/yes 都视为启用
-is_enabled() {
-    [[ "$1" == "y" || "$1" == "yes" || -z "$1" ]] && return 0 || return 1
-}
 
 # 1. 系统检测与包管理器识别
 if [[ -f /etc/os-release ]]; then
@@ -2149,7 +2149,7 @@ if is_enabled "$ENABLE_ARGO"; then
     rm -f ${NGINX_CONF_DIR}/default.conf 2>/dev/null
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null
 
-    local listen_ipv6=""
+    listen_ipv6=""
     if [[ -f /proc/sys/net/ipv6/conf/all/disable_ipv6 && $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6) -ne 1 ]]; then
         listen_ipv6="listen [::1]:${PORT_NGINX};"
     fi
@@ -2230,9 +2230,9 @@ fi
 
 # Argo 隧道服务（仅在启用 Argo 时）
 if is_enabled "$ENABLE_ARGO"; then
-    local argo_mode="temp"
-    local argo_token=""
-    local argo_domain=""
+    argo_mode="temp"
+    argo_token=""
+    argo_domain=""
     if [[ -f /etc/s-box/argo.conf ]]; then
         source /etc/s-box/argo.conf
         argo_mode=$ARGO_MODE
@@ -2240,8 +2240,13 @@ if is_enabled "$ENABLE_ARGO"; then
         argo_domain=$ARGO_DOMAIN
     fi
 
+    argo_depend="net sing-box"
+    if is_enabled "$USE_NGINX"; then
+        argo_depend="net sing-box nginx"
+    fi
+
     if $IS_OPENRC; then
-        local cf_args="tunnel --url http://127.0.0.1:${PORT_NGINX}"
+        cf_args="tunnel --url http://127.0.0.1:${ARGO_PORT}"
         if [[ "$argo_mode" == "token" ]]; then
             cf_args="tunnel --no-autoupdate run --token ${argo_token}"
         fi
@@ -2256,7 +2261,7 @@ pidfile="/run/\${RC_SVCNAME}.pid"
 output_log="/var/log/argo-tunnel.log"
 error_log="/var/log/argo-tunnel.log"
 depend() {
-    need net sing-box nginx
+    need ${argo_depend}
 }
 EOF
         chmod +x /etc/init.d/argo-tunnel
@@ -2266,7 +2271,7 @@ EOF
         : > /var/log/argo-tunnel.err 2>/dev/null
         service_restart argo-tunnel
     else
-        local cf_exec="/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${PORT_NGINX}"
+        cf_exec="/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${ARGO_PORT}"
         if [[ "$argo_mode" == "token" ]]; then
             cf_exec="/usr/local/bin/cloudflared tunnel --no-autoupdate run --token ${argo_token}"
         fi
@@ -2297,6 +2302,9 @@ EOF
 ARGO_MODE="token"
 ARGO_TOKEN="${argo_token}"
 ARGO_DOMAIN="${ARGO_DOMAIN}"
+USE_NGINX="${USE_NGINX}"
+ARGO_PORT="${ARGO_PORT}"
+ARGO_TARGET_PROTOCOL="${ARGO_TARGET_PROTOCOL}"
 EOF_ARGO
     else
         log_info "正在等待 Argo 隧道上线，获取节点临时域名..."
