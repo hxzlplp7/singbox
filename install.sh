@@ -170,6 +170,11 @@ service_disable() {
     fi
 }
 
+# 统一判断，空值或 y/yes 都视为启用
+is_enabled() {
+    [[ "$1" == "y" || "$1" == "yes" || -z "$1" ]] && return 0 || return 1
+}
+
 # 重新生成 Nginx 配置
 regenerate_nginx_conf() {
     if ! is_enabled "$USE_NGINX"; then
