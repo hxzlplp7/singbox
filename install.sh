@@ -1551,9 +1551,28 @@ while true; do
             if crontab -l 2>/dev/null | grep -q "sb cron"; then
                 crontab -l | grep -v "sb cron" | crontab -
                 echo "已成功关闭自愈守护定时任务。"
-                (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/sb cron >> /etc/s-box/monitor.log 2>&1") | crontab -
+            else
+                echo "=================================================="
+                echo "          配置服务自愈守护检测频率"
+                echo "=================================================="
+                echo "1. 每分钟检测一次 (默认，直接回车)"
+                echo "2. 每 5 分钟检测一次"
+                echo "3. 每 10 分钟检测一次"
+                echo "4. 每 30 分钟检测一次"
+                echo "5. 每小时检测一次"
+                echo "=================================================="
+                read -p "请输入选项 [1-5, 默认1]: " cron_choice
+                cron_time="* * * * *"
+                case $cron_choice in
+                    2) cron_time="*/5 * * * *" ;;
+                    3) cron_time="*/10 * * * *" ;;
+                    4) cron_time="*/30 * * * *" ;;
+                    5) cron_time="0 * * * *" ;;
+                    *) cron_time="* * * * *" ;;
+                esac
+                (crontab -l 2>/dev/null; echo "${cron_time} /usr/local/bin/sb cron >> /etc/s-box/monitor.log 2>&1") | crontab -
                 : > /etc/s-box/monitor.log 2>/dev/null
-                echo "已成功开启自愈守护定时任务 (每分钟检测重启一次)。"
+                echo "已成功开启自愈守护定时任务 (检测频率: ${cron_time})。"
             fi
             read -p "按回车键继续..." temp
             ;;
